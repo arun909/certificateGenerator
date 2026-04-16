@@ -1,0 +1,49 @@
+{
+    "collections": [
+        {
+            "name": "customers",
+            "indexes": [
+                "name"
+            ]
+        },
+        {
+            "name": "users",
+            "indexes": [
+                "email",
+                "customer_id"
+            ]
+        },
+        {
+            "name": "applications",
+            "indexes": [
+                "customer_id",
+                "name"
+            ]
+        },
+        {
+            "name": "devices",
+            "indexes": [
+                "device_id_string",
+                "application_id",
+                "customer_id"
+            ]
+        },
+        {
+            "name": "certificates",
+            "indexes": [
+                "device_id",
+                "generated_by"
+            ]
+        }
+    ],
+    "example_device_document": {
+        "name": "Tractor-01",
+        "device_id_string": "DEV-12345",
+        "endpoint_id": "tok_abc789",
+        "application_id": "60d5f21f...",
+        "customer_id": "60d5f21f...",
+        "app_version": "v1.2.0",
+        "status": "ONLINE",
+        "created_at": "2024-04-10T15:15:25Z"
+    }
+}
