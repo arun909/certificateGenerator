@@ -2,6 +2,8 @@ from pymongo import MongoClient
 import datetime
 import sys
 
+import bcrypt
+
 def seed_database():
     try:
         # Use the local MongoDB instance
@@ -20,24 +22,44 @@ def seed_database():
 
         # 2. Create Customer
         customer = {
-            "name": "Test Customer",
+            "name": "TrizLabz Admin Org",
+            "device_limit": 100,
+            "app_limit": 50,
             "created_at": datetime.datetime.now(datetime.timezone.utc)
         }
         customer_result = db.customers.insert_one(customer)
         customer_id = customer_result.inserted_id
-        print(f"Created customer: Test Customer ({customer_id})")
+        print(f"Created customer: TrizLabz Admin Org ({customer_id})")
 
-        # 3. Create Dummy User 'test'
+        # 3. Create Super Admin User 'trizlabz'
+        username = "trizlabz"
+        password = "trizlabz1234#"
+        hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
         user = {
-            "email": "test",
-            "password_hash": "password", # As discussed, a dummy password
-            "role": "ADMIN",
+            "email": username,
+            "password_hash": hashed_pw,
+            "role": "SUPER_ADMIN",
             "customer_id": customer_id,
-            "customer_name": "Test Customer",
+            "customer_name": "TrizLabz Admin Org",
             "created_at": datetime.datetime.now(datetime.timezone.utc)
         }
         db.users.insert_one(user)
-        print("Created user: test (password: password)")
+        print(f"Created super admin user: {username} (password: {password})")
+
+        # 4. Create an additional test user for verification
+        test_user_password = "password123"
+        test_hashed_pw = bcrypt.hashpw(test_user_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        test_user = {
+            "email": "testuser",
+            "password_hash": test_hashed_pw,
+            "role": "ADMIN",
+            "customer_id": customer_id,
+            "customer_name": "TrizLabz Admin Org",
+            "created_at": datetime.datetime.now(datetime.timezone.utc)
+        }
+        db.users.insert_one(test_user)
+        print(f"Created test user: testuser (password: {test_user_password})")
 
         print("\nDatabase 'certificate_generator' seeded successfully.")
 

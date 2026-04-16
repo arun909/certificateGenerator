@@ -76,7 +76,11 @@ const LoginPage: React.FC<LoginViewProps> = ({
     }, [isLoading, isAuthenticated, user, isMounted, licenseWarning]);
 
     const redirectToDashboard = () => {
-        navigate("/dashboard");
+        if (user?.role === "SUPER_ADMIN") {
+            navigate("/admin");
+        } else {
+            navigate("/dashboard");
+        }
     };
 
     if (!isMounted || isCheckingAuth || isLoading) {

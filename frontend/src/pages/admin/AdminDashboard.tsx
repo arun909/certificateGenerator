@@ -16,9 +16,17 @@ import { cn } from '@/lib/utils';
 import conqueLogo from "@/assets/conque.png";
 
 const AdminDashboard: React.FC = () => {
-    const { logout } = useAuth();
+    const { user, isAuthenticated, logout } = useAuth();
     const navigate = useNavigate();
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    React.useEffect(() => {
+        if (!isAuthenticated) {
+            navigate('/login');
+        } else if (user?.role !== 'SUPER_ADMIN') {
+            navigate('/dashboard');
+        }
+    }, [isAuthenticated, user, navigate]);
 
     const [userForm, setUserForm] = useState({
         organization: '',
