@@ -56,7 +56,7 @@ const AdminDashboard: React.FC = () => {
         ]
     });
 
-    const [activeTab, setActiveTab] = useState<'onboarding' | 'users'>('onboarding');
+    const [activeTab, setActiveTab] = useState<'onboarding' | 'users'>('users');
     const [users, setUsers] = useState<any[]>([]);
     const [isLoadingUsers, setIsLoadingUsers] = useState(false);
     const [editingUser, setEditingUser] = useState<any | null>(null);
@@ -646,19 +646,6 @@ const AdminDashboard: React.FC = () => {
 
                 <nav className="flex-1 p-4 space-y-2">
                     <button
-                        onClick={() => setActiveTab('onboarding')}
-                        className={cn(
-                            "w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all",
-                            activeTab === 'onboarding'
-                                ? "bg-blue-600 text-white shadow-lg shadow-blue-900/40"
-                                : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                        )}
-                    >
-                        <UserPlus size={20} />
-                        <span className="font-medium">Add User</span>
-                    </button>
-
-                    <button
                         onClick={() => setActiveTab('users')}
                         className={cn(
                             "w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all",
@@ -670,7 +657,21 @@ const AdminDashboard: React.FC = () => {
                         <Users size={20} />
                         <span className="font-medium">User List</span>
                     </button>
+
+                    <button
+                        onClick={() => setActiveTab('onboarding')}
+                        className={cn(
+                            "w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all",
+                            activeTab === 'onboarding'
+                                ? "bg-blue-600 text-white shadow-lg shadow-blue-900/40"
+                                : "text-slate-400 hover:bg-slate-800 hover:text-white"
+                        )}
+                    >
+                        <UserPlus size={20} />
+                        <span className="font-medium">Add User</span>
+                    </button>
                 </nav>
+
 
                 <div className="p-4 border-t border-slate-800">
                     <button
@@ -695,8 +696,11 @@ const AdminDashboard: React.FC = () => {
                     </div>
 
                     <div className="flex items-center space-x-4">
+                        <div className="hidden sm:flex flex-col items-end mr-2">
+                            <span className="text-sm font-semibold text-slate-800">{user?.customer_name || 'Administrator'}</span>
+                        </div>
                         <div className="bg-slate-100 rounded-full w-10 h-10 flex items-center justify-center text-slate-600 font-bold">
-                            AD
+                            {user?.customer_name?.charAt(0) || 'A'}
                         </div>
                     </div>
                 </header>
@@ -1180,117 +1184,145 @@ const AdminDashboard: React.FC = () => {
                                                                     No plants or applications configured yet.
                                                                 </div>
                                                             ) : (() => {
-                                                                const plantGroups: Record<string, typeof userApps> = {};
+                                                                const knownPlants = stats?.plant_certs || [];
+                                                                const appsByPlant: Record<string, typeof userApps> = {};
+                                                                
+                                                                // Group apps by plant
                                                                 userApps.forEach(app => {
                                                                     const pName = app.plant_name || 'Ungrouped';
-                                                                    if (!plantGroups[pName]) plantGroups[pName] = [];
-                                                                    plantGroups[pName].push(app);
+                                                                    if (!appsByPlant[pName]) appsByPlant[pName] = [];
+                                                                    appsByPlant[pName].push(app);
                                                                 });
+
+                                                                // Plants to render: start with all known plants from stats
+                                                                const plantsToRender = knownPlants.map((pc: any) => ({
+                                                                    name: pc.plant_name,
+                                                                    apps: appsByPlant[pc.plant_name] || [],
+                                                                    certs: pc.cert_paths
+                                                                }));
+
+                                                                // Add an "Ungrouped" section if there are apps naturally ungrouped or assigned to non-existent plants
+                                                                const knownPlantNames = new Set(knownPlants.map((pc: any) => pc.plant_name));
+                                                                const ungroupedApps = userApps.filter(app => !app.plant_name || !knownPlantNames.has(app.plant_name));
+                                                                
+                                                                if (ungroupedApps.length > 0) {
+                                                                    plantsToRender.push({
+                                                                        name: 'Ungrouped / Heritage',
+                                                                        apps: ungroupedApps,
+                                                                        certs: null
+                                                                    });
+                                                                }
 
                                                                 return (
                                                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                                                        {Object.entries(plantGroups).map(([plantName, apps]) => {
-                                                                            const plantCerts = stats?.plant_certs?.find((pc: any) => pc.plant_name === plantName);
-                                                                            const hasCerts = plantCerts && Object.keys(plantCerts.cert_paths || {}).length === 3;
-                                                                            const plantDeviceCount = apps.reduce((sum, app) => sum + (app.device_count || 0), 0);
+                                                                        {plantsToRender.map((plant) => {
+                                                                            const hasCerts = plant.certs && Object.keys(plant.certs || {}).length === 3;
+                                                                            const plantDeviceCount = plant.apps.reduce((sum, app) => sum + (app.device_count || 0), 0);
 
                                                                             return (
-                                                                                <div key={plantName} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col group/plant shadow-slate-200/50">
+                                                                                <div key={plant.name} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col group/plant shadow-slate-200/50">
                                                                                     <div className="p-4 border-b border-slate-50 bg-slate-50/30 flex items-center justify-between">
                                                                                         <div className="flex items-center gap-3">
                                                                                             <div className={cn(
                                                                                                 "w-10 h-10 rounded-xl flex items-center justify-center",
-                                                                                                hasCerts ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
+                                                                                                plant.certs ? (hasCerts ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600") : "bg-slate-50 text-slate-400"
                                                                                             )}>
-                                                                                                {hasCerts ? <Shield size={18} /> : <AlertCircle size={18} />}
+                                                                                                {!plant.certs ? <HardDrive size={18} /> : hasCerts ? <Shield size={18} /> : <AlertCircle size={18} />}
                                                                                             </div>
                                                                                             <div className="flex flex-col">
-                                                                                                <span className="text-sm font-bold text-slate-800">{plantName}</span>
+                                                                                                <span className="text-sm font-bold text-slate-800">{plant.name}</span>
                                                                                                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                                                                                                    {hasCerts ? "Certs Valid" : "Certs Missing"}
+                                                                                                    {plant.certs ? (hasCerts ? "Certs Valid" : "Certs Missing") : "No Infrastructure"}
                                                                                                 </span>
                                                                                             </div>
                                                                                         </div>
-                                                                                        <div className="flex items-center gap-1">
-                                                                                            <button
-                                                                                                onClick={() => {
-                                                                                                    const pCerts = stats?.plant_certs?.find((pc: any) => pc.plant_name === plantName);
-                                                                                                    setEditingPlant({
-                                                                                                        plantName,
-                                                                                                        customerId: user.customer_id,
-                                                                                                        certPaths: pCerts?.cert_paths,
-                                                                                                        apps: apps
-                                                                                                    });
-                                                                                                }}
-                                                                                                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
-                                                                                                title="Edit Plant"
-                                                                                            >
-                                                                                                <Edit2 size={16} />
-                                                                                            </button>
-                                                                                            <button
-                                                                                                onClick={() => handleDeletePlant(plantName, user.customer_id)}
-                                                                                                className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
-                                                                                                title="Delete Plant"
-                                                                                            >
-                                                                                                <Trash2 size={16} />
-                                                                                            </button>
-                                                                                        </div>
+                                                                                        {plant.certs && (
+                                                                                            <div className="flex items-center gap-1">
+                                                                                                <button
+                                                                                                    onClick={() => {
+                                                                                                        setEditingPlant({
+                                                                                                            plantName: plant.name,
+                                                                                                            customerId: user.customer_id,
+                                                                                                            certPaths: plant.certs,
+                                                                                                            apps: plant.apps
+                                                                                                        });
+                                                                                                    }}
+                                                                                                    className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
+                                                                                                    title="Edit Plant"
+                                                                                                >
+                                                                                                    <Edit2 size={16} />
+                                                                                                </button>
+                                                                                                <button
+                                                                                                    onClick={() => handleDeletePlant(plant.name, user.customer_id)}
+                                                                                                    className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                                                                                                    title="Delete Plant"
+                                                                                                >
+                                                                                                    <Trash2 size={16} />
+                                                                                                </button>
+                                                                                            </div>
+                                                                                        )}
                                                                                     </div>
 
                                                                                     <div className="p-4 bg-white flex-1 space-y-3">
                                                                                         <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                                                                            <span>Applications ({apps.length})</span>
+                                                                                            <span>Applications ({plant.apps.length})</span>
                                                                                             <span className="text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">Total Devices: {plantDeviceCount}</span>
                                                                                         </div>
 
                                                                                         <div className="space-y-2">
-                                                                                            {apps.slice(0, 3).map(app => (
-                                                                                                <div
-                                                                                                    key={app._id}
-                                                                                                    onClick={() => toggleAppExpand(app._id)}
-                                                                                                    className={cn(
-                                                                                                        "p-3 rounded-xl border border-slate-50 hover:border-blue-100 hover:bg-blue-50/30 transition-all cursor-pointer flex items-center justify-between group/app-item",
-                                                                                                        expandedApp === app._id && "border-blue-100 bg-blue-50/50"
-                                                                                                    )}
-                                                                                                >
-                                                                                                    <div className="flex items-center gap-3">
-                                                                                                        <div className="w-8 h-8 rounded-lg bg-blue-100/50 flex items-center justify-center text-blue-600 group-hover/app-item:bg-blue-600 group-hover/app-item:text-white transition-colors">
-                                                                                                            <HardDrive size={14} />
-                                                                                                        </div>
-                                                                                                        <div className="flex flex-col">
-                                                                                                            <span className="text-xs font-bold text-slate-700">{app.name}</span>
-                                                                                                            <span className="text-[9px] text-slate-400">{app.manual_id || 'Auto-ID'}</span>
-                                                                                                        </div>
-                                                                                                    </div>
-                                                                                                    <div className="flex items-center gap-2">
-                                                                                                        <button
-                                                                                                            onClick={(e) => { e.stopPropagation(); handleStartEditApp(app); }}
-                                                                                                            className="p-1 text-slate-300 hover:text-blue-600 transition-all opacity-0 group-hover/app-item:opacity-100"
-                                                                                                            title="Edit Application"
-                                                                                                        >
-                                                                                                            <Edit2 size={12} />
-                                                                                                        </button>
-                                                                                                        <button
-                                                                                                            onClick={(e) => { e.stopPropagation(); handleDeleteApp(app._id); }}
-                                                                                                            className="p-1 text-slate-300 hover:text-red-600 transition-all opacity-0 group-hover/app-item:opacity-100"
-                                                                                                            title="Delete Application"
-                                                                                                        >
-                                                                                                            <Trash2 size={12} />
-                                                                                                        </button>
-                                                                                                        <ChevronRight size={14} className={cn("text-slate-300 transition-transform", expandedApp === app._id && "rotate-90 text-blue-500")} />
-                                                                                                    </div>
+                                                                                            {plant.apps.length === 0 ? (
+                                                                                                <div className="py-8 text-center text-[10px] text-slate-300 italic border border-dashed border-slate-100 rounded-xl">
+                                                                                                    No applications in this plant.
                                                                                                 </div>
-                                                                                            ))}
-                                                                                            {apps.length > 3 && (
+                                                                                            ) : (
+                                                                                                plant.apps.slice(0, 3).map(app => (
+                                                                                                    <div
+                                                                                                        key={app._id}
+                                                                                                        onClick={() => toggleAppExpand(app._id)}
+                                                                                                        className={cn(
+                                                                                                            "p-3 rounded-xl border border-slate-50 hover:border-blue-100 hover:bg-blue-50/30 transition-all cursor-pointer flex items-center justify-between group/app-item",
+                                                                                                            expandedApp === app._id && "border-blue-100 bg-blue-50/50"
+                                                                                                        )}
+                                                                                                    >
+                                                                                                        <div className="flex items-center gap-3">
+                                                                                                            <div className="w-8 h-8 rounded-lg bg-blue-100/50 flex items-center justify-center text-blue-600 group-hover/app-item:bg-blue-600 group-hover/app-item:text-white transition-colors">
+                                                                                                                <HardDrive size={14} />
+                                                                                                            </div>
+                                                                                                            <div className="flex flex-col">
+                                                                                                                <span className="text-xs font-bold text-slate-700">{app.name}</span>
+                                                                                                                <span className="text-[9px] text-slate-400">{app.manual_id || 'Auto-ID'}</span>
+                                                                                                            </div>
+                                                                                                        </div>
+                                                                                                        <div className="flex items-center gap-2">
+                                                                                                            <button
+                                                                                                                onClick={(e) => { e.stopPropagation(); handleStartEditApp(app); }}
+                                                                                                                className="p-1 text-slate-300 hover:text-blue-600 transition-all opacity-0 group-hover/app-item:opacity-100"
+                                                                                                                title="Edit Application"
+                                                                                                            >
+                                                                                                                <Edit2 size={12} />
+                                                                                                            </button>
+                                                                                                            <button
+                                                                                                                onClick={(e) => { e.stopPropagation(); handleDeleteApp(app._id); }}
+                                                                                                                className="p-1 text-slate-300 hover:text-red-600 transition-all opacity-0 group-hover/app-item:opacity-100"
+                                                                                                                title="Delete Application"
+                                                                                                            >
+                                                                                                                <Trash2 size={12} />
+                                                                                                            </button>
+                                                                                                            <ChevronRight size={14} className={cn("text-slate-300 transition-transform", expandedApp === app._id && "rotate-90 text-blue-500")} />
+                                                                                                        </div>
+                                                                                                    </div>
+                                                                                                ))
+                                                                                            )}
+                                                                                            {plant.apps.length > 3 && (
                                                                                                 <div className="text-[10px] text-center font-bold text-slate-400 py-1">
-                                                                                                    + {apps.length - 3} more applications
+                                                                                                    + {plant.apps.length - 3} more applications
                                                                                                 </div>
                                                                                             )}
                                                                                         </div>
                                                                                     </div>
 
                                                                                     {/* App Details nested expands */}
-                                                                                    {apps.some(a => a._id === expandedApp) && (
+                                                                                    {plant.apps.some(a => a._id === expandedApp) && (
                                                                                         <div className="px-4 pb-4 animate-in slide-in-from-top-2">
                                                                                             <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
                                                                                                 <div className="flex items-center justify-between mb-2">
@@ -1323,7 +1355,8 @@ const AdminDashboard: React.FC = () => {
                                                                         })}
                                                                     </div>
                                                                 );
-                                                            })()}
+                                                            })()
+}
                                                         </div>
                                                     )}
                                                 </div>

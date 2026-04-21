@@ -7,8 +7,9 @@ import bcrypt
 def seed_database():
     try:
         # Use the local MongoDB instance
-        connection_string = "mongodb://127.0.0.1:27017/"
+        connection_string = "mongodb://admin:password@127.0.0.1:27017/?authSource=admin"
         client = MongoClient(connection_string, serverSelectionTimeoutMS=5000)
+
         
         # Check connection
         client.admin.command('ping')

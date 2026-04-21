@@ -19,8 +19,9 @@ app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
 # --- Database Setup ---
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017/")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:password@127.0.0.1:27017/?authSource=admin")
 client = MongoClient(MONGO_URI)
+
 db = client["certificate_generator"]
 
 # --- Encryption Logic ---
@@ -111,7 +112,13 @@ def login():
     email = data.get("email")
     password = data.get("password")
     
+    print(f"Login attempt for: {email}, password provided? {'Yes' if password else 'No'}")
+    
     user = db.users.find_one({"email": email})
+    if not user:
+        print(f"User not found: {email}")
+    else:
+        print(f"User found: {email}, comparing password...")
     if user and bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
         user_data = {
             "email": user["email"],
@@ -785,6 +792,197 @@ def generate_certificate():
 
     except Exception as e:
         print(f"Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/generate-certificate-manual", methods=["POST"])
+def generate_certificate_manual():
+    data = request.json
+    print(f"[generate-certificate-manual] Received payload: {data}")
+
+    customer_id_str = data.get("customer_id")
+    plant_name = data.get("plant_name")
+    application_id_str = data.get("application_id")
+    
+    device_name = data.get("device_name")
+    device_id_str = data.get("device_id_string")
+    device_token = data.get("endpoint_id")
+    app_version = data.get("app_version", "1.0")
+    
+    if not all([customer_id_str, plant_name, application_id_str, device_name, device_id_str]):
+        return jsonify({"error": "Missing required fields."}), 400
+
+    try:
+        customer_id = ObjectId(customer_id_str)
+        app_oid = ObjectId(application_id_str)
+        
+        customer = db.customers.find_one({"_id": customer_id})
+        if not customer:
+            return jsonify({"error": "Customer not found."}), 404
+            
+        application = db.applications.find_one({"_id": app_oid})
+        if not application:
+            return jsonify({"error": "Application not found."}), 404
+            
+        device_count = db.devices.count_documents({"customer_id": customer_id})
+        if device_count >= customer.get("device_limit", 10):
+            return jsonify({"error": f"Device limit ({customer['device_limit']}) reached. Cannot provision more devices."}), 403
+            
+        # Find matching plant CA
+        plant_certs = customer.get("plant_certs", [])
+        plant_ca_crt = None
+        plant_ca_key = None
+        for pc in plant_certs:
+            if pc.get("plant_name") == plant_name:
+                plant_ca_crt = pc.get("cert_paths", {}).get("crt")
+                plant_ca_key = pc.get("cert_paths", {}).get("key")
+                break
+                
+        if not plant_ca_crt or not plant_ca_key or not os.path.exists(plant_ca_crt):
+            return jsonify({"error": f"CA certificates for plant '{plant_name}' not found. Please setup them in Admin Panel."}), 400
+
+        details = {
+            "device_name": device_name,
+            "device_id": device_id_str,
+            "endpoint_id": device_token,
+            "app_version": app_version,
+            "application_name": application.get("name"),
+            "application_id": str(application.get("_id")),
+            "plant_name": plant_name,
+            "mqtt_broker": "192.168.0.23",
+            "mqtt_port": 8883
+        }
+
+        # Preparation
+        temp_dir = tempfile.mkdtemp()
+        try:
+            device_dir = os.path.join(temp_dir, device_name)
+            os.makedirs(device_dir, exist_ok=True)
+            
+            client_key = os.path.join(device_dir, "client.key")
+            client_csr = os.path.join(device_dir, "client.csr")
+            client_crt = os.path.join(device_dir, "client.crt")
+            ext_config_path = os.path.join(device_dir, "client_ext.cnf")
+            json_path = os.path.join(device_dir, "device_details.json")
+
+            run_cmd(f"openssl genrsa -out {client_key} 2048")
+            run_cmd(
+                f'openssl req -new -key {client_key} -out {client_csr} '
+                f'-subj "/C=IN/ST=Kerala/L=Trivandrum/O=MyOrg/OU=IoT/CN={device_name}"'
+            )
+
+            ext_config_content = f"""
+            authorityKeyIdentifier=keyid,issuer
+            basicConstraints=CA:FALSE
+            keyUsage = digitalSignature, keyEncipherment
+            extendedKeyUsage = clientAuth
+            subjectAltName = @alt_names
+            [alt_names]
+            DNS.1 = {device_name}
+            """
+            with open(ext_config_path, "w") as f:
+                f.write(textwrap.dedent(ext_config_content))
+
+            run_cmd(
+                f"openssl x509 -req -in {client_csr} -CA {plant_ca_crt} -CAkey {plant_ca_key} "
+                f"-CAcreateserial -out {client_crt} -days 365 -sha256 "
+                f"-extfile {ext_config_path}"
+            )
+
+            with open(json_path, "w") as jf:
+                json.dump(details, jf, indent=4)
+
+            zip_filename = f"{device_name}_package.zip"
+            zip_path = os.path.join(temp_dir, zip_filename)
+            with zipfile.ZipFile(zip_path, 'w') as zipf:
+                zipf.write(client_key, arcname="client.key")
+                zipf.write(client_crt, arcname="client.crt")
+                zipf.write(plant_ca_crt, arcname="ca.crt")
+                zipf.write(json_path, arcname="device_details.json")
+
+            with open(zip_path, "rb") as zf:
+                zip_binary = zf.read()
+                zip_base64 = base64.b64encode(zip_binary).decode('utf-8')
+
+            # Record log & save zip
+            log = {
+                "device_id_string": device_id_str,
+                "device_name": device_name,
+                "filename": zip_filename,
+                "customer_id": customer_id,
+                "plant_name": plant_name,
+                "application_id": app_oid,
+                "zip_data": zip_base64,
+                "created_at": datetime.datetime.now(datetime.timezone.utc)
+            }
+            db.certificates.insert_one(log)
+
+            # Update or create the actual device
+            existing_device = db.devices.find_one({"device_id_string": device_id_str, "customer_id": customer_id})
+            if existing_device:
+                db.devices.update_one(
+                    {"_id": existing_device["_id"]},
+                    {"$set": {
+                        "name": device_name,
+                        "endpoint_id": device_token,
+                        "application_id": app_oid,
+                        "status": "PROVISIONED",
+                        "app_version": app_version,
+                        "updated_at": datetime.datetime.now(datetime.timezone.utc)
+                    }}
+                )
+            else:
+                new_device = {
+                    "name": device_name,
+                    "device_id_string": device_id_str,
+                    "endpoint_id": device_token,
+                    "customer_id": customer_id,
+                    "application_id": app_oid,
+                    "app_version": app_version,
+                    "status": "PROVISIONED",
+                    "created_at": datetime.datetime.now(datetime.timezone.utc)
+                }
+                db.devices.insert_one(new_device)
+
+            return jsonify({
+                "success": True,
+                "details": details,
+                "zip_data": zip_base64,
+                "filename": zip_filename
+            })
+        finally:
+            shutil.rmtree(temp_dir)
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/admin/certificates", methods=["GET"])
+def get_certificates():
+    customer_id = request.args.get("customer_id")
+    query = {}
+    if customer_id:
+        query["customer_id"] = ObjectId(customer_id)
+        
+    certs = list(db.certificates.find(query, {"zip_data": 0}).sort("created_at", -1))
+    for c in certs:
+        c["_id"] = str(c["_id"])
+        if "customer_id" in c: c["customer_id"] = str(c["customer_id"])
+        if "application_id" in c: c["application_id"] = str(c["application_id"])
+    return jsonify(certs)
+
+@app.route("/api/admin/certificates/<cert_id>/download", methods=["GET"])
+def download_certificate(cert_id):
+    try:
+        cert = db.certificates.find_one({"_id": ObjectId(cert_id)})
+        if not cert or "zip_data" not in cert:
+            return jsonify({"error": "Certificate file not found"}), 404
+            
+        return jsonify({
+            "success": True, 
+            "zip_data": cert["zip_data"], 
+            "filename": cert.get("filename", "certificate_package.zip")
+        })
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":

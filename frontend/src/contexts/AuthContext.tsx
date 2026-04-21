@@ -41,7 +41,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const login = async (email: string, password: string, _rememberMe: boolean) => {
         try {
-            const response = await fetch("http://localhost:5001/api/auth/login", {
+            const response = await fetch("/fms-api/api/auth/login", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ email, password })

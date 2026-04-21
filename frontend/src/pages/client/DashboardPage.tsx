@@ -1,25 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { QrCode, Upload, LogOut, LayoutDashboard, X, Loader2, CheckCircle2, Download } from 'lucide-react';
+import { FileKey, QrCode, Upload, LogOut, LayoutDashboard, X, Loader2, CheckCircle2, Download, Shield, HardDrive, AlertCircle, ChevronRight } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Html5Qrcode } from 'html5-qrcode';
 import conqueLogo from "@/assets/conque.png";
 
 const DashboardPage: React.FC = () => {
     const { logout, user } = useAuth();
     const navigate = useNavigate();
-    const [isScanning, setIsScanning] = useState(false);
+    
+    // UI State
+    const [isManualGenOpen, setIsManualGenOpen] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [lastGenerated, setLastGenerated] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [deviceDetails, setDeviceDetails] = useState<any | null>(null);
-    const [cameraError, setCameraError] = useState<string | null>(null);
+
+    // Manual Form State
+    const [manualForm, setManualForm] = useState({
+        plant_name: '',
+        application_id: '',
+        device_name: '',
+        device_id_string: '',
+        endpoint_id: '',
+        app_version: '1.0'
+    });
 
     const [applications, setApplications] = useState<any[]>([]);
     const [devices, setDevices] = useState<any[]>([]);
+    const [plantCerts, setPlantCerts] = useState<any[]>([]);
     const [limits, setLimits] = useState<{ app_limit: number; device_limit: number } | null>(null);
     const [isLoadingAssets, setIsLoadingAssets] = useState(true);
+    const [expandedApp, setExpandedApp] = useState<string | null>(null);
 
     const fetchMyAssets = async () => {
         if (!user?.customer_id) return;
@@ -32,6 +45,7 @@ const DashboardPage: React.FC = () => {
             if (statsRes.ok) {
                 const stats = await statsRes.json();
                 setLimits({ app_limit: stats.app_limit || 5, device_limit: stats.device_limit || 10 });
+                setPlantCerts(stats.plant_certs || []);
             }
             if (appsRes.ok) setApplications(await appsRes.json());
             if (devsRes.ok) setDevices(await devsRes.json());
@@ -72,101 +86,25 @@ const DashboardPage: React.FC = () => {
         };
     }, [downloadUrl]);
 
-    useEffect(() => {
-        let html5QrCode: Html5Qrcode | null = null;
-        let isSubscribed = true;
-
-        const startScanner = async () => {
-            if (!isScanning) return;
-
-            // Wait until the element is actually in the DOM
-            let attempts = 0;
-            while (attempts < 10 && !document.getElementById("qr-reader")) {
-                await new Promise(r => setTimeout(r, 100));
-                attempts++;
-            }
-
-            if (!document.getElementById("qr-reader") || !isSubscribed) return;
-
-            setCameraError(null);
-            try {
-                html5QrCode = new Html5Qrcode("qr-reader");
-                const devices = await Html5Qrcode.getCameras();
-
-                if (devices && devices.length > 0 && isSubscribed) {
-                    const cameraId = devices[0].id;
-                    await html5QrCode.start(
-                        cameraId,
-                        {
-                            fps: 10,
-                            qrbox: { width: 250, height: 250 },
-                        },
-                        (decodedText) => {
-                            if (isSubscribed) onScanSuccess(decodedText);
-                        },
-                        () => { }
-                    );
-                } else if (isSubscribed) {
-                    setCameraError("No cameras detected. Please ensure your camera is connected.");
-                }
-            } catch (err: any) {
-                console.error("Camera access error:", err);
-                if (!isSubscribed) return;
-
-                const errStr = err.toString();
-                if (errStr.includes("Permission")) {
-                    setCameraError("Camera access denied. Please click the camera icon in your browser address bar to allow access.");
-                } else if (errStr.includes("NotReadableError")) {
-                    setCameraError("Camera is already in use by another application or tab.");
-                } else {
-                    setCameraError("Failed to initialize camera. (" + errStr + ")");
-                }
-            }
-        };
-
-        startScanner();
-
-        return () => {
-            isSubscribed = false;
-            if (html5QrCode) {
-                const stopAndClear = async () => {
-                    try {
-                        if (html5QrCode?.isScanning) {
-                            await html5QrCode.stop();
-                        }
-                        await html5QrCode?.clear();
-                    } catch (e) {
-                        console.error("Cleanup error:", e);
-                    }
-                };
-                stopAndClear();
-            }
-        };
-    }, [isScanning]);
-
-    const onScanSuccess = async (decodedText: string) => {
-        console.log("Scan Success:", decodedText);
-        setIsScanning(false);
-        await handleGenerateCertificate(decodedText);
-    };
-
-    const handleGenerateCertificate = async (qrData: string) => {
+    const handleManualGenerate = async (e: React.FormEvent) => {
+        e.preventDefault();
         setIsGenerating(true);
         setError(null);
         setLastGenerated(null);
         setDownloadUrl(null);
 
         try {
-            console.log("Sending QR data to backend. customer_id:", user?.customer_id);
-            const response = await fetch('/fms-api/api/generate-certificate', {
+            const response = await fetch('/fms-api/api/generate-certificate-manual', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    qrData,
-                    userContext: {
-                        customer_id: user?.customer_id,
-                        customer_name: user?.customer_name
-                    }
+                    customer_id: user?.customer_id,
+                    plant_name: manualForm.plant_name,
+                    application_id: manualForm.application_id,
+                    device_name: manualForm.device_name,
+                    device_id_string: manualForm.device_id_string,
+                    endpoint_id: manualForm.endpoint_id,
+                    app_version: manualForm.app_version
                 })
             });
 
@@ -177,7 +115,6 @@ const DashboardPage: React.FC = () => {
                 throw new Error(data.error || `Server responded with ${response.status}`);
             }
 
-            // Convert base64 to blob
             const byteCharacters = atob(data.zip_data);
             const byteNumbers = new Array(byteCharacters.length);
             for (let i = 0; i < byteCharacters.length; i++) {
@@ -187,43 +124,16 @@ const DashboardPage: React.FC = () => {
             const blob = new Blob([byteArray], { type: 'application/zip' });
 
             const url = window.URL.createObjectURL(blob);
-
             setDownloadUrl(url);
             setLastGenerated(data.filename);
             setDeviceDetails(data.details);
+            setIsManualGenOpen(false);
 
-            console.log("Certificate package ready for download:", data.filename);
         } catch (err: any) {
             console.error(err);
             setError(err.message);
         } finally {
             setIsGenerating(false);
-        }
-    };
-
-    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        setIsGenerating(true);
-        setError(null);
-        setLastGenerated(null);
-        setDownloadUrl(null);
-
-        // Create a temporary scanner to process the file
-        const html5QrCode = new Html5Qrcode("reader-hidden");
-
-        try {
-            const decodedText = await html5QrCode.scanFile(file, true);
-            console.log("File Scan Success:", decodedText);
-            await handleGenerateCertificate(decodedText);
-        } catch (err: any) {
-            console.error("File Scan Error:", err);
-            setError("Could not find a valid QR code in this image. Please try another photo.");
-            setIsGenerating(false);
-        } finally {
-            // Clean up the temporary scanner instance if needed
-            // (scanFile is static-like in behavior but needs a div to work in some versions)
         }
     };
 
@@ -243,7 +153,6 @@ const DashboardPage: React.FC = () => {
                 <div className="flex items-center space-x-4">
                     <div className="hidden sm:flex flex-col items-end mr-2">
                         <span className="text-sm font-semibold text-slate-800">{user?.customer_name || 'User'}</span>
-                        <span className="text-xs text-slate-500">{user?.role || 'Guest'}</span>
                     </div>
                     <button
                         onClick={handleLogout}
@@ -329,56 +238,19 @@ const DashboardPage: React.FC = () => {
                     </div>
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {/* Scan QR Card */}
+                <div className="grid grid-cols-1 gap-8">
                     <button
-                        onClick={() => setIsScanning(true)}
+                        onClick={() => setIsManualGenOpen(true)}
                         className="group relative flex flex-col items-center justify-center p-10 bg-white border-2 border-slate-100 rounded-3xl shadow-xl shadow-slate-200/50 hover:border-blue-500 transition-all hover:scale-[1.02] cursor-pointer overflow-hidden"
                     >
-                        {isGenerating && (
-                            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-20 flex flex-col items-center justify-center space-y-4">
-                                <Loader2 size={40} className="text-blue-600 animate-spin" />
-                                <p className="text-slate-900 font-bold">Generating Package...</p>
-                            </div>
-                        )}
-
                         <div className="w-20 h-20 bg-blue-50 rounded-2xl flex items-center justify-center mb-6 text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                            <QrCode size={40} />
+                            <FileKey size={40} />
                         </div>
-                        <h2 className="text-2xl font-bold text-slate-900 mb-2">Scan QR</h2>
-                        <p className="text-center text-slate-500 max-w-[240px]">
-                            Use your device camera to scan a QR code instantly.
+                        <h2 className="text-2xl font-bold text-slate-900 mb-2">Generate Device Certificate</h2>
+                        <p className="text-center text-slate-500 max-w-[400px]">
+                            Manually select a plant and application, and provide device details to generate and download a secure certificate package.
                         </p>
-                        <div className="mt-8 flex items-center text-blue-600 font-semibold text-sm">
-                            Launch Scanner
-                            <svg className="ml-2 w-4 h-4 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                            </svg>
-                        </div>
                     </button>
-
-                    {/* Upload QR Card */}
-                    <div className="group relative flex flex-col items-center justify-center p-10 bg-white border-2 border-slate-100 rounded-3xl shadow-xl shadow-slate-200/50 hover:border-purple-500 transition-all hover:scale-[1.02] cursor-pointer">
-                        <div className="w-20 h-20 bg-purple-50 rounded-2xl flex items-center justify-center mb-6 text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors">
-                            <Upload size={40} />
-                        </div>
-                        <h2 className="text-2xl font-bold text-slate-900 mb-2">Upload QR</h2>
-                        <p className="text-center text-slate-500 max-w-[240px]">
-                            Upload a QR code image from your library for processing.
-                        </p>
-                        <div className="mt-8 flex items-center text-purple-600 font-semibold text-sm">
-                            Upload Image
-                            <svg className="ml-2 w-4 h-4 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                            </svg>
-                        </div>
-                        <input
-                            type="file"
-                            className="absolute inset-0 opacity-0 cursor-pointer"
-                            accept="image/*"
-                            onChange={handleImageUpload}
-                        />
-                    </div>
                 </div>
 
                 {/* Your Assets Section */}
@@ -396,11 +268,6 @@ const DashboardPage: React.FC = () => {
                         {limits && (
                             <div className="flex gap-4">
                                 <div className="bg-white border rounded-xl px-4 py-2 shadow-sm text-sm">
-                                    <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">App Limit</span>
-                                    <span className="font-bold text-slate-800">{applications.length}</span>
-                                    <span className="text-slate-400 font-medium"> / {limits.app_limit}</span>
-                                </div>
-                                <div className="bg-white border rounded-xl px-4 py-2 shadow-sm text-sm">
                                     <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">Device Limit</span>
                                     <span className="font-bold text-slate-800">{devices.length}</span>
                                     <span className="text-slate-400 font-medium"> / {limits.device_limit}</span>
@@ -413,111 +280,259 @@ const DashboardPage: React.FC = () => {
                         <div className="flex items-center justify-center p-12 text-slate-400">
                             <Loader2 size={32} className="animate-spin" />
                         </div>
-                    ) : applications.length === 0 ? (
-                        <div className="p-12 text-center bg-white border border-slate-100 rounded-3xl text-slate-500 shadow-sm">
-                            <p>No applications found for your account.</p>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-1 gap-6">
-                            {applications.map(app => {
-                                const appDevs = devices.filter(d => d.application_id === app._id);
-                                return (
-                                    <div key={app._id} className="bg-white border-2 border-slate-100 rounded-3xl p-6 shadow-sm hover:border-indigo-100 transition-colors">
-                                        <div className="flex items-center justify-between mb-6">
-                                            <div>
-                                                <h3 className="text-xl font-bold text-slate-900">{app.name}</h3>
-                                                {app.description && <p className="text-sm text-slate-500 mt-1">{app.description}</p>}
+                    ) : (() => {
+                        const appsByPlant: Record<string, any[]> = {};
+                        applications.forEach(app => {
+                            const pName = app.plant_name || 'Ungrouped';
+                            if (!appsByPlant[pName]) appsByPlant[pName] = [];
+                            appsByPlant[pName].push(app);
+                        });
+
+                        const plantsToRender = plantCerts.map((pc: any) => ({
+                            name: pc.plant_name,
+                            apps: appsByPlant[pc.plant_name] || [],
+                            certs: pc.cert_paths
+                        }));
+
+                        const knownPlantNames = new Set(plantCerts.map((pc: any) => pc.plant_name));
+                        const ungroupedApps = applications.filter(app => !app.plant_name || !knownPlantNames.has(app.plant_name));
+                        
+                        if (ungroupedApps.length > 0) {
+                            plantsToRender.push({
+                                name: 'Ungrouped / Heritage',
+                                apps: ungroupedApps,
+                                certs: null
+                            });
+                        }
+
+                        if (plantsToRender.length === 0) {
+                            return (
+                                <div className="p-12 text-center bg-white border border-slate-100 rounded-3xl text-slate-500 shadow-sm">
+                                    <p>No plants or applications found for your account.</p>
+                                </div>
+                            );
+                        }
+
+                        return (
+                            <div className="grid grid-cols-1 gap-8">
+                                {plantsToRender.map(plant => {
+                                    const hasCerts = plant.certs && Object.keys(plant.certs || {}).length === 3;
+                                    const plantDeviceCount = plant.apps.reduce((sum, app) => {
+                                        const appDevs = devices.filter(d => d.application_id === app._id);
+                                        return sum + appDevs.length;
+                                    }, 0);
+
+                                    return (
+                                        <div key={plant.name} className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col group/plant shadow-slate-200/50">
+                                            <div className="p-5 border-b border-slate-50 bg-slate-50/30 flex items-center justify-between">
+                                                <div className="flex items-center gap-4">
+                                                    <div className={cn(
+                                                        "w-12 h-12 rounded-2xl flex items-center justify-center transition-colors",
+                                                        plant.certs ? (hasCerts ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600") : "bg-slate-50 text-slate-400"
+                                                    )}>
+                                                        {!plant.certs ? <HardDrive size={24} /> : hasCerts ? <Shield size={24} /> : <AlertCircle size={24} />}
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <h3 className="text-lg font-bold text-slate-800">{plant.name}</h3>
+                                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                                            {plant.certs ? (hasCerts ? "Certs Valid" : "Certs Missing") : "Location Managed Access"}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="bg-white border border-slate-100 px-3 py-1 rounded-xl text-xs font-bold text-slate-500">
+                                                        {plant.apps.length} Apps
+                                                    </div>
+                                                    <div className="bg-indigo-50 text-indigo-600 px-3 py-1 rounded-xl text-xs font-bold">
+                                                        {plantDeviceCount} Devices
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <div className="bg-indigo-50 px-3 py-1 rounded-full text-indigo-600 font-bold text-xs uppercase tracking-widest">
-                                                {appDevs.length} Device{appDevs.length !== 1 ? 's' : ''}
+
+                                            <div className="p-6 bg-white space-y-4">
+                                                {plant.apps.length === 0 ? (
+                                                    <div className="py-12 text-center text-sm text-slate-300 italic border-2 border-dashed border-slate-50 rounded-2xl">
+                                                        No applications configured in this plant.
+                                                    </div>
+                                                ) : (
+                                                    <div className="grid grid-cols-1 gap-4">
+                                                        {plant.apps.map(app => {
+                                                            const appDevs = devices.filter(d => d.application_id === app._id);
+                                                            const isExpanded = expandedApp === app._id;
+                                                            
+                                                            return (
+                                                                <div 
+                                                                    key={app._id} 
+                                                                    className={cn(
+                                                                        "border border-slate-100 rounded-2xl transition-all overflow-hidden",
+                                                                        isExpanded ? "ring-2 ring-indigo-500/10 border-indigo-200" : "hover:border-slate-200"
+                                                                    )}
+                                                                >
+                                                                    <div 
+                                                                        onClick={() => setExpandedApp(isExpanded ? null : app._id)}
+                                                                        className="p-4 flex items-center justify-between cursor-pointer group/app"
+                                                                    >
+                                                                        <div className="flex items-center gap-4">
+                                                                            <div className={cn(
+                                                                                "w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
+                                                                                isExpanded ? "bg-indigo-600 text-white" : "bg-slate-50 text-slate-400 group-hover/app:bg-indigo-50 group-hover/app:text-indigo-600"
+                                                                            )}>
+                                                                                <HardDrive size={20} />
+                                                                            </div>
+                                                                            <div>
+                                                                                <h4 className="font-bold text-slate-800">{app.name}</h4>
+                                                                                <p className="text-xs text-slate-500 truncate max-w-[200px]">{app.description || app.manual_id || 'Application Node'}</p>
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-4">
+                                                                            <span className="text-[10px] font-bold text-slate-400 uppercase bg-slate-50 px-2 py-0.5 rounded-md">
+                                                                                {appDevs.length} Devices
+                                                                            </span>
+                                                                            <ChevronRight size={20} className={cn("text-slate-300 transition-transform", isExpanded && "rotate-90 text-indigo-500")} />
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {isExpanded && (
+                                                                        <div className="px-4 pb-4 animate-in slide-in-from-top-2">
+                                                                            <div className="bg-slate-50 rounded-xl p-4 border border-slate-100 mt-2">
+                                                                                <div className="flex items-center justify-between mb-3">
+                                                                                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Enrolled Devices</span>
+                                                                                </div>
+                                                                                
+                                                                                {appDevs.length === 0 ? (
+                                                                                    <div className="text-sm text-slate-400 italic py-4 text-center">
+                                                                                        No devices enrolled in this application.
+                                                                                    </div>
+                                                                                ) : (
+                                                                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                                                                        {appDevs.map(dev => (
+                                                                                            <div key={dev._id} className="bg-white p-3 rounded-xl border border-slate-100 flex flex-col group/device shadow-sm">
+                                                                                                <div className="flex items-center justify-between mb-2">
+                                                                                                    <span className="text-[11px] font-bold text-slate-700">{dev.name}</span>
+                                                                                                    <span className="text-[8px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">ONLINE</span>
+                                                                                                </div>
+                                                                                                <div className="space-y-1">
+                                                                                                    <div className="flex items-center justify-between text-[9px]">
+                                                                                                        <span className="text-slate-400">ID:</span>
+                                                                                                        <span className="font-mono text-slate-600">{dev.device_id_string || 'N/A'}</span>
+                                                                                                    </div>
+                                                                                                    <div className="flex items-center justify-between text-[9px]">
+                                                                                                        <span className="text-slate-400">Ver:</span>
+                                                                                                        <span className="text-slate-600">{dev.version || 'v1.0'}</span>
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            </div>
+                                                                                        ))}
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
-
-                                        {appDevs.length > 0 ? (
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                                                {appDevs.map(dev => (
-                                                    <div key={dev._id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100/60">
-                                                        <div className="flex items-center justify-between mb-2">
-                                                            <h4 className="font-bold text-slate-800 text-sm truncate">{dev.name}</h4>
-                                                            <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">{dev.status || 'PROVISIONED'}</span>
-                                                        </div>
-                                                        <div className="text-[10px] text-slate-500 space-y-1">
-                                                            <p><span className="font-semibold text-slate-400 mr-1">SN:</span>{dev.device_id_string || 'N/A'}</p>
-                                                            <p><span className="font-semibold text-slate-400 mr-1">Ver:</span>{dev.version || 'v1.0'}</p>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        ) : (
-                                            <div className="p-4 text-xs text-slate-400 italic text-center bg-slate-50/50 rounded-2xl border border-slate-100">
-                                                No devices enrolled in this application.
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
+                                    );
+                                })}
+                            </div>
+                        );
+                    })()}
                 </div>
 
-                {/* QR Scanner Modal */}
-                {isScanning && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
-                        <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-lg overflow-hidden relative">
+                {/* Manual Generation Modal */}
+                {isManualGenOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in overflow-y-auto">
+                        <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-xl overflow-hidden relative my-8">
                             <button
-                                onClick={() => setIsScanning(false)}
+                                onClick={() => setIsManualGenOpen(false)}
                                 className="absolute top-6 right-6 z-10 p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full transition-colors"
                             >
                                 <X size={20} />
                             </button>
 
-                            <div className="p-8 pb-4 text-center">
-                                <h3 className="text-2xl font-bold text-slate-900 mb-2">Scan Device QR</h3>
-                                <p className="text-slate-500 text-sm">Position the QR code within the frame to authenticate.</p>
+                            <div className="p-8 pb-4">
+                                <h3 className="text-2xl font-bold text-slate-900 mb-2">Generate Certificate</h3>
+                                <p className="text-slate-500 text-sm">Provide device details to generate a secure certificate package.</p>
                             </div>
 
                             <div className="p-8 pt-0">
-                                <div className="overflow-hidden rounded-3xl border-4 border-slate-50 relative min-h-[300px] bg-slate-50 flex flex-col items-center justify-center">
-                                    {cameraError ? (
-                                        <div className="p-8 text-center animate-in fade-in zoom-in-95">
-                                            <div className="w-16 h-16 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                                                <X size={32} />
-                                            </div>
-                                            <p className="text-slate-900 font-bold mb-2">Camera Error</p>
-                                            <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-                                                {cameraError}
-                                            </p>
-                                            <button
-                                                onClick={() => {
-                                                    setIsScanning(false);
-                                                    setTimeout(() => setIsScanning(true), 100);
-                                                }}
-                                                className="px-6 py-2 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors"
+                                <form onSubmit={handleManualGenerate} className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-sm font-semibold text-slate-700 block mb-1">Select Plant</label>
+                                            <select 
+                                                required
+                                                value={manualForm.plant_name}
+                                                onChange={e => setManualForm({...manualForm, plant_name: e.target.value, application_id: ''})}
+                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50"
                                             >
-                                                Retry Camera
-                                            </button>
+                                                <option value="">-- Choose Plant --</option>
+                                                {plantCerts.map((pc: any) => (
+                                                    <option key={pc.plant_name} value={pc.plant_name}>{pc.plant_name}</option>
+                                                ))}
+                                            </select>
                                         </div>
-                                    ) : (
-                                        <div id="qr-reader" className="w-full h-full"></div>
-                                    )}
-                                </div>
-                            </div>
+                                        <div>
+                                            <label className="text-sm font-semibold text-slate-700 block mb-1">Select Application</label>
+                                            <select 
+                                                required
+                                                value={manualForm.application_id}
+                                                onChange={e => setManualForm({...manualForm, application_id: e.target.value})}
+                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50"
+                                                disabled={!manualForm.plant_name}
+                                            >
+                                                <option value="">-- Choose App --</option>
+                                                {applications.filter(a => a.plant_name === manualForm.plant_name).map(a => (
+                                                    <option key={a._id} value={a._id}>{a.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <label className="text-sm font-semibold text-slate-700 block mb-1">Device Name</label>
+                                        <input required type="text" value={manualForm.device_name} onChange={e => setManualForm({...manualForm, device_name: e.target.value})} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50" />
+                                    </div>
+                                    <div>
+                                        <label className="text-sm font-semibold text-slate-700 block mb-1">Device ID</label>
+                                        <input required type="text" value={manualForm.device_id_string} onChange={e => setManualForm({...manualForm, device_id_string: e.target.value})} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-sm font-semibold text-slate-700 block mb-1">Endpoint Token</label>
+                                            <input required type="text" value={manualForm.endpoint_id} onChange={e => setManualForm({...manualForm, endpoint_id: e.target.value})} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50" />
+                                        </div>
+                                        <div>
+                                            <label className="text-sm font-semibold text-slate-700 block mb-1">App Version</label>
+                                            <input required type="text" value={manualForm.app_version} onChange={e => setManualForm({...manualForm, app_version: e.target.value})} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50" />
+                                        </div>
+                                    </div>
 
-                            {!cameraError && (
-                                <div className="bg-slate-50 p-6 flex items-center justify-center space-x-3 text-slate-400">
-                                    <Loader2 size={16} className="animate-spin" />
-                                    <span className="text-xs font-bold uppercase tracking-widest">Awaiting detection...</span>
-                                </div>
-                            )}
+                                    {error && <div className="text-red-500 text-sm mt-2 font-bold bg-red-50 p-3 rounded-lg border border-red-100">{error}</div>}
+
+                                    <div className="mt-6">
+                                        <button disabled={isGenerating} type="submit" className="w-full py-4 text-white bg-blue-600 rounded-xl font-bold hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center space-x-2">
+                                            {isGenerating ? (
+                                                <>
+                                                    <Loader2 className="animate-spin" />
+                                                    <span>Generating...</span>
+                                                </>
+                                            ) : (
+                                                <span>Generate & Download Package</span>
+                                            )}
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
                         </div>
                     </div>
                 )}
 
                 {/* Modal logic ends here */}
             </main>
-
-            {/* Hidden reader for file scanning */}
-            <div id="reader-hidden" style={{ display: 'none' }}></div>
 
             {/* Footer */}
             <footer className="py-8 text-center text-slate-400 text-sm">
