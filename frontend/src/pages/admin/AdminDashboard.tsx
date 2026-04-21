@@ -71,6 +71,7 @@ const AdminDashboard: React.FC = () => {
     const [expandedApp, setExpandedApp] = useState<string | null>(null);
     const [userApps, setUserApps] = useState<any[]>([]);
     const [appDevices, setAppDevices] = useState<any[]>([]);
+    const [userCerts, setUserCerts] = useState<any[]>([]);
     const [isLoadingDrillDown, setIsLoadingDrillDown] = useState(false);
 
     // UI Refinement States
@@ -598,22 +599,51 @@ const AdminDashboard: React.FC = () => {
             setUserApps([]);
             setExpandedApp(null);
             setAppDevices([]);
+            setUserCerts([]);
             return;
         }
 
         setExpandedUser(userId);
         setIsLoadingDrillDown(true);
         try {
-            const [apps, stats] = await Promise.all([
+            const [apps, stats, certs] = await Promise.all([
                 fetchWithAuth(`/api/applications?customer_id=${customerId}`),
-                fetchWithAuth(`/api/customers/${customerId}/stats`)
+                fetchWithAuth(`/api/customers/${customerId}/stats`),
+                fetchWithAuth(`/api/admin/certificates?customer_id=${customerId}`)
             ]);
             setUserApps(apps);
             setUserStats(prev => ({ ...prev, [customerId]: stats }));
+            setUserCerts(certs || []);
         } catch (err) {
-            console.error('Failed to fetch apps/stats:', err);
+            console.error('Failed to fetch apps/stats/certs:', err);
         } finally {
             setIsLoadingDrillDown(false);
+        }
+    };
+
+    const handleDownloadCert = async (certId: string, filename: string) => {
+        try {
+            const response = await fetchWithAuth(`/api/admin/certificates/${certId}/download`);
+            if (response.zip_data) {
+                const byteCharacters = atob(response.zip_data);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: 'application/zip' });
+                const url = window.URL.createObjectURL(blob);
+
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename || 'certificate_package.zip';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+            }
+        } catch (err) {
+            alert('Failed to download certificate package.');
         }
     };
 
@@ -1357,6 +1387,34 @@ const AdminDashboard: React.FC = () => {
                                                                 );
                                                             })()
 }
+                                                            {/* User Certificates */}
+                                                            {userCerts && userCerts.length > 0 && (
+                                                                <div className="p-6 border-t border-slate-100 bg-slate-50/50">
+                                                                    <div className="flex items-center gap-2 mb-4">
+                                                                        <div className="w-5 h-5 rounded-full bg-purple-100/50 flex items-center justify-center text-purple-600">
+                                                                            <Download size={10} />
+                                                                        </div>
+                                                                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Generated Certificates</h4>
+                                                                    </div>
+                                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                                        {userCerts.map((cert: any) => (
+                                                                            <div key={cert._id} className="bg-white border border-slate-100 rounded-xl p-3 flex justify-between items-center group shadow-sm hover:shadow-md transition-all">
+                                                                                <div className="flex flex-col">
+                                                                                    <span className="text-xs font-bold text-slate-700">{cert.device_name || 'Device'}</span>
+                                                                                    <span className="text-[9px] text-slate-400 font-mono tracking-wider">{cert.device_id_string || cert.filename}</span>
+                                                                                </div>
+                                                                                <button
+                                                                                    onClick={() => handleDownloadCert(cert._id, cert.filename)}
+                                                                                    className="p-2 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-all"
+                                                                                    title="Download Zip"
+                                                                                >
+                                                                                    <Download size={14} />
+                                                                                </button>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     )}
                                                 </div>
