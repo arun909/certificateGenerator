@@ -128,17 +128,127 @@ def get_users():
     customer_id = request.args.get("customer_id")
     query = {"customer_id": ObjectId(customer_id)} if customer_id else {}
     users = list(db.users.find(query))
+    
+    enriched_users = []
     for u in users:
         u["_id"] = str(u["_id"])
-        u["customer_id"] = str(u["customer_id"])
+        c_id = u["customer_id"]
+        u["customer_id"] = str(c_id)
         if "password_hash" in u: del u["password_hash"]
-    return jsonify(users)
+        
+        # Add usage info
+        customer = db.customers.find_one({"_id": c_id})
+        if customer:
+            u["device_limit"] = customer.get("device_limit", 10)
+            u["device_count"] = db.devices.count_documents({"customer_id": c_id})
+            u["customer_name"] = customer.get("name", "")
+        
+        enriched_users.append(u)
+        
+    return jsonify(enriched_users)
 
 @app.route("/api/users/<user_id>", methods=["DELETE"])
 def delete_user(user_id):
     try:
         db.users.delete_one({"_id": ObjectId(user_id)})
         return jsonify({"success": True, "message": "User deleted successfully"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/admin/update-plant-certs", methods=["POST"])
+def update_plant_certs():
+    try:
+        # Expect FormData with 'customer_id', 'plant_name', and files
+        customer_id = request.form.get("customer_id")
+        plant_name = request.form.get("plant_name")
+        old_plant_name = request.form.get("old_plant_name") or plant_name
+        
+        if not customer_id or not plant_name:
+            return jsonify({"error": "Missing customer_id or plant_name"}), 400
+            
+        cert_paths = {}
+        plant_dir = os.path.join(CERTS_DIR, "customers", str(customer_id), plant_name)
+        os.makedirs(plant_dir, exist_ok=True)
+        
+        for ext in ["crt", "key", "srl"]:
+            uploaded = request.files.get(ext)
+            if uploaded:
+                dest = os.path.join(plant_dir, f"ca.{ext}")
+                uploaded.save(dest)
+                cert_paths[ext] = dest
+                
+        if cert_paths:
+            # Update the plant_certs array in customer document
+            customer = db.customers.find_one({"_id": ObjectId(customer_id)})
+            if customer:
+                plant_certs = customer.get("plant_certs", [])
+                updated = False
+                for pc in plant_certs:
+                    if pc.get("plant_name") == old_plant_name:
+                        pc["plant_name"] = plant_name # Update name if changed
+                        pc["cert_paths"].update(cert_paths)
+                        updated = True
+                        break
+                
+                if not updated:
+                    plant_certs.append({"plant_name": plant_name, "cert_paths": cert_paths})
+                
+                db.customers.update_one(
+                    {"_id": ObjectId(customer_id)},
+                    {"$set": {"plant_certs": plant_certs}}
+                )
+                
+            # If plant name changed, update all applications belonging to this customer and old_plant_name
+            if plant_name != old_plant_name:
+                db.applications.update_many(
+                    {"customer_id": ObjectId(customer_id), "plant_name": old_plant_name},
+                    {"$set": {"plant_name": plant_name}}
+                )
+
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+@app.route("/api/admin/add-plant", methods=["POST"])
+def add_plant():
+    try:
+        # Expect FormData with 'customer_id', 'plant_name', and files
+        customer_id = request.form.get("customer_id")
+        plant_name = request.form.get("plant_name")
+        
+        if not customer_id or not plant_name:
+            return jsonify({"error": "Missing customer_id or plant_name"}), 400
+            
+        # Check if plant already exists for this customer
+        customer = db.customers.find_one({"_id": ObjectId(customer_id)})
+        if not customer:
+            return jsonify({"error": "Customer not found"}), 404
+            
+        plant_certs = customer.get("plant_certs", [])
+        if any(pc.get("plant_name") == plant_name for pc in plant_certs):
+            return jsonify({"error": f"Plant '{plant_name}' already exists"}), 400
+
+        cert_paths = {}
+        plant_dir = os.path.join(CERTS_DIR, "customers", str(customer_id), plant_name)
+        os.makedirs(plant_dir, exist_ok=True)
+        
+        for ext in ["crt", "key", "srl"]:
+            uploaded = request.files.get(ext)
+            if uploaded:
+                dest = os.path.join(plant_dir, f"ca.{ext}")
+                uploaded.save(dest)
+                cert_paths[ext] = dest
+            else:
+                # We expect all 3 files for a new plant
+                return jsonify({"error": f"Missing required certificate file: .{ext}"}), 400
+                
+        # Add to plant_certs array
+        plant_certs.append({"plant_name": plant_name, "cert_paths": cert_paths})
+        db.customers.update_one(
+            {"_id": ObjectId(customer_id)},
+            {"$set": {"plant_certs": plant_certs}}
+        )
+        
+        return jsonify({"success": True, "message": f"Plant '{plant_name}' added successfully"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -192,13 +302,16 @@ def register():
 @app.route("/api/admin/onboard", methods=["POST"])
 def onboard_system():
     try:
-        data = request.json
+        # Support both JSON and FormData (multipart) requests
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            data = json.loads(request.form.get("data", "{}"))
+        else:
+            data = request.json
         print(f"Onboarding request: {data}")
         
         org_name = data.get("organization")
         username = data.get("email") # mapped from 'email' state in frontend
         password = data.get("password")
-        app_limit = data.get("app_limit", 5)
         device_limit = data.get("device_limit", 10)
         
         if not all([org_name, username, password]):
@@ -208,7 +321,6 @@ def onboard_system():
         new_customer = {
             "name": org_name,
             "device_limit": int(device_limit),
-            "app_limit": int(app_limit),
             "created_at": datetime.datetime.now(datetime.timezone.utc)
         }
         cust_result = db.customers.insert_one(new_customer)
@@ -226,36 +338,61 @@ def onboard_system():
         }
         db.users.insert_one(new_user)
         
-        # 3. Create Hierarchical Apps and Devices (Optional)
-        apps_data = data.get("apps", [])
-        for app_item in apps_data:
-            app_name = app_item.get("name")
-            if app_name:
-                new_app = {
-                    "name": app_name,
-                    "manual_id": app_item.get("manual_id"),
-                    "customer_id": customer_id,
-                    "created_at": datetime.datetime.now(datetime.timezone.utc)
-                }
-                app_result = db.applications.insert_one(new_app)
-                app_id = app_result.inserted_id
-                
-                # Process Devices for this App
-                devices_data = app_item.get("devices", [])
-                for dev_item in devices_data:
-                    dev_name = dev_item.get("name")
-                    dev_id_manual = dev_item.get("device_id")
-                    if dev_name or dev_id_manual:
-                        new_device = {
-                            "name": dev_name or "Gateway-01",
-                            "device_id_string": dev_id_manual or f"DEV-{str(customer_id)[-6:]}",
-                            "customer_id": customer_id,
-                            "application_id": app_id,
-                            "version": dev_item.get("version"),
-                            "status": "PROVISIONED",
-                            "created_at": datetime.datetime.now(datetime.timezone.utc)
-                        }
-                        db.devices.insert_one(new_device)
+        # 3. Create Hierarchical Plants -> Apps -> Devices (Optional)
+        plants_data = data.get("plants", [])
+        for idx, plant_item in enumerate(plants_data):
+            plant_name = plant_item.get("name")
+
+            # Save cert files if present (from FormData)
+            cert_paths = {}
+            for ext in ["crt", "key", "srl"]:
+                file_key = f"plant_{idx}_{ext}"
+                uploaded = request.files.get(file_key)
+                if uploaded:
+                    plant_dir = os.path.join(CERTS_DIR, "customers", str(customer_id), plant_name or f"plant_{idx}")
+                    os.makedirs(plant_dir, exist_ok=True)
+                    dest = os.path.join(plant_dir, f"ca.{ext}")
+                    uploaded.save(dest)
+                    cert_paths[ext] = dest
+                    print(f"Saved {ext} file for plant '{plant_name}' -> {dest}")
+
+            # Store cert paths on the customer document if any files were saved
+            if cert_paths:
+                db.customers.update_one(
+                    {"_id": customer_id},
+                    {"$push": {"plant_certs": {"plant_name": plant_name, "cert_paths": cert_paths}}}
+                )
+
+            apps_data = plant_item.get("apps", [])
+            for app_item in apps_data:
+                app_name = app_item.get("name")
+                if app_name:
+                    new_app = {
+                        "name": app_name,
+                        "manual_id": app_item.get("manual_id"),
+                        "plant_name": plant_name,
+                        "customer_id": customer_id,
+                        "created_at": datetime.datetime.now(datetime.timezone.utc)
+                    }
+                    app_result = db.applications.insert_one(new_app)
+                    app_id = app_result.inserted_id
+                    
+                    # Process Devices for this App
+                    devices_data = app_item.get("devices", [])
+                    for dev_item in devices_data:
+                        dev_name = dev_item.get("name")
+                        dev_id_manual = dev_item.get("device_id")
+                        if dev_name or dev_id_manual:
+                            new_device = {
+                                "name": dev_name or "Gateway-01",
+                                "device_id_string": dev_id_manual or f"DEV-{str(customer_id)[-6:]}",
+                                "customer_id": customer_id,
+                                "application_id": app_id,
+                                "version": dev_item.get("version"),
+                                "status": "PROVISIONED",
+                                "created_at": datetime.datetime.now(datetime.timezone.utc)
+                            }
+                            db.devices.insert_one(new_device)
             
         return jsonify({
             "success": True, 
@@ -291,7 +428,6 @@ def update_user_bundle():
             
         # 2. Update Customer Limits
         customer_updates = {
-            "app_limit": int(data.get("app_limit", 5)),
             "device_limit": int(data.get("device_limit", 10))
         }
         db.customers.update_one({"_id": ObjectId(customer_id)}, {"$set": customer_updates})
@@ -386,8 +522,8 @@ def get_customer_stats(customer_id):
     return jsonify({
         "app_count": app_count,
         "device_count": device_count,
-        "app_limit": customer.get("app_limit", 5),
-        "device_limit": customer.get("device_limit", 10)
+        "device_limit": customer.get("device_limit", 10),
+        "plant_certs": customer.get("plant_certs", [])
     })
 
 @app.route("/api/applications", methods=["GET", "POST"])
@@ -395,16 +531,12 @@ def manage_applications():
     if request.method == "POST":
         data = request.json
         customer_id = ObjectId(data.get("customer_id"))
-        
-        # Check app limit
-        count = db.applications.count_documents({"customer_id": customer_id})
-        customer = db.customers.find_one({"_id": customer_id})
-        if customer and count >= customer.get("app_limit", 5):
-            return jsonify({"error": "Application limit reached for this customer"}), 403
             
         new_app = {
             "name": data.get("name"),
             "description": data.get("description"),
+            "manual_id": data.get("manual_id"),
+            "plant_name": data.get("plant_name"),
             "customer_id": customer_id,
             "created_at": datetime.datetime.now(datetime.timezone.utc)
         }
@@ -426,6 +558,8 @@ def update_application(app_id):
         update_fields = {}
         if "name" in data: update_fields["name"] = data["name"]
         if "description" in data: update_fields["description"] = data["description"]
+        if "manual_id" in data: update_fields["manual_id"] = data["manual_id"]
+        if "plant_name" in data: update_fields["plant_name"] = data["plant_name"]
         
         db.applications.update_one({"_id": ObjectId(app_id)}, {"$set": update_fields})
         return jsonify({"success": True})
