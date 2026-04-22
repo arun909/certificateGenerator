@@ -15,7 +15,8 @@ import {
     AlertCircle,
     Server,
     Shield,
-    HardDrive
+    HardDrive,
+    Download
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -72,6 +73,7 @@ const AdminDashboard: React.FC = () => {
     const [userApps, setUserApps] = useState<any[]>([]);
     const [appDevices, setAppDevices] = useState<any[]>([]);
     const [userCerts, setUserCerts] = useState<any[]>([]);
+    const [userOrphanDevices, setUserOrphanDevices] = useState<any[]>([]);
     const [isLoadingDrillDown, setIsLoadingDrillDown] = useState(false);
 
     // UI Refinement States
@@ -226,6 +228,17 @@ const AdminDashboard: React.FC = () => {
             fetchUsers();
         }
     }, [activeTab]);
+
+    React.useEffect(() => {
+        const savedUserId = sessionStorage.getItem('expandedUserId');
+        const savedCustId = sessionStorage.getItem('expandedCustId');
+        if (savedUserId && savedCustId && users.length > 0 && !expandedUser) {
+            const user = users.find(u => u._id === savedUserId);
+            if (user) {
+                toggleUserExpand(savedUserId, savedCustId);
+            }
+        }
+    }, [users]);
 
     const handleStartEdit = async (user: any) => {
         console.log('Starting edit for user:', user);
@@ -450,6 +463,13 @@ const AdminDashboard: React.FC = () => {
             // Note: In this simple version we assume the user might have edited names in the modal apps list
             // For brevity, we'll focus on the plant-level updates first and basic app name sync
             for (const app of editingPlant.apps) {
+                if (app._deleted) {
+                    if (app._id && !String(app._id).startsWith('new-')) {
+                        await fetchWithAuth(`/api/applications/${app._id}`, { method: 'DELETE' });
+                    }
+                    continue;
+                }
+
                 if (app._id && !app._id.startsWith('new-')) {
                     await fetchWithAuth(`/api/applications/${app._id}`, {
                         method: 'PUT',
@@ -457,6 +477,16 @@ const AdminDashboard: React.FC = () => {
                             name: app.name,
                             manual_id: app.manual_id,
                             plant_name: editingPlant.plantName
+                        })
+                    });
+                } else if (app.name?.trim()) {
+                    await fetchWithAuth('/api/applications', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            name: app.name.trim(),
+                            manual_id: (app.manual_id || '').trim(),
+                            plant_name: editingPlant.plantName,
+                            customer_id: editingPlant.customerId
                         })
                     });
                 }
@@ -596,24 +626,31 @@ const AdminDashboard: React.FC = () => {
     const toggleUserExpand = async (userId: string, customerId: string) => {
         if (expandedUser === userId) {
             setExpandedUser(null);
+            sessionStorage.removeItem('expandedUserId');
+            sessionStorage.removeItem('expandedCustId');
             setUserApps([]);
             setExpandedApp(null);
             setAppDevices([]);
             setUserCerts([]);
+            setUserOrphanDevices([]);
             return;
         }
 
         setExpandedUser(userId);
+        sessionStorage.setItem('expandedUserId', userId);
+        sessionStorage.setItem('expandedCustId', customerId);
         setIsLoadingDrillDown(true);
         try {
-            const [apps, stats, certs] = await Promise.all([
+            const [apps, stats, certs, allDevs] = await Promise.all([
                 fetchWithAuth(`/api/applications?customer_id=${customerId}`),
                 fetchWithAuth(`/api/customers/${customerId}/stats`),
-                fetchWithAuth(`/api/admin/certificates?customer_id=${customerId}`)
+                fetchWithAuth(`/api/admin/certificates?customer_id=${customerId}`),
+                fetchWithAuth(`/api/devices?customer_id=${customerId}`)
             ]);
             setUserApps(apps);
             setUserStats(prev => ({ ...prev, [customerId]: stats }));
             setUserCerts(certs || []);
+            setUserOrphanDevices(allDevs.filter((d: any) => !d.application_id));
         } catch (err) {
             console.error('Failed to fetch apps/stats/certs:', err);
         } finally {
@@ -1204,19 +1241,20 @@ const AdminDashboard: React.FC = () => {
                                                                 </div>
                                                             </div>
 
-                                                            {isLoadingDrillDown && userApps.length === 0 ? (
+                                                            {isLoadingDrillDown && userApps.length === 0 && (!stats?.plant_certs || stats.plant_certs.length === 0) ? (
                                                                 <div className="flex items-center justify-center gap-3 py-12 text-slate-400">
                                                                     <RefreshCw size={24} className="animate-spin" />
                                                                     <span className="font-semibold">Syncing platform data...</span>
                                                                 </div>
-                                                            ) : userApps.length === 0 ? (
+                                                            ) : userApps.length === 0 && (!stats?.plant_certs || stats.plant_certs.length === 0) && userOrphanDevices.length === 0 ? (
                                                                 <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center text-slate-400 italic">
                                                                     No plants or applications configured yet.
                                                                 </div>
                                                             ) : (() => {
                                                                 const knownPlants = stats?.plant_certs || [];
                                                                 const appsByPlant: Record<string, typeof userApps> = {};
-                                                                
+                                                                const orphanPlants = new Set(userOrphanDevices.map((d: any) => d.plant_name).filter(Boolean));
+
                                                                 // Group apps by plant
                                                                 userApps.forEach(app => {
                                                                     const pName = app.plant_name || 'Ungrouped';
@@ -1224,17 +1262,24 @@ const AdminDashboard: React.FC = () => {
                                                                     appsByPlant[pName].push(app);
                                                                 });
 
-                                                                // Plants to render: start with all known plants from stats
-                                                                const plantsToRender = knownPlants.map((pc: any) => ({
-                                                                    name: pc.plant_name,
-                                                                    apps: appsByPlant[pc.plant_name] || [],
-                                                                    certs: pc.cert_paths
-                                                                }));
+                                                                // Combine known plants from stats and plants that only have orphans
+                                                                const allPlantNames = new Set([
+                                                                    ...knownPlants.map((pc: any) => pc.plant_name),
+                                                                    ...Array.from(orphanPlants)
+                                                                ]);
 
-                                                                // Add an "Ungrouped" section if there are apps naturally ungrouped or assigned to non-existent plants
-                                                                const knownPlantNames = new Set(knownPlants.map((pc: any) => pc.plant_name));
-                                                                const ungroupedApps = userApps.filter(app => !app.plant_name || !knownPlantNames.has(app.plant_name));
-                                                                
+                                                                const plantsToRender = Array.from(allPlantNames).map(pName => {
+                                                                    const pc = knownPlants.find((k: any) => k.plant_name === pName);
+                                                                    return {
+                                                                        name: pName,
+                                                                        apps: appsByPlant[pName] || [],
+                                                                        certs: pc?.cert_paths || null
+                                                                    };
+                                                                });
+
+                                                                // Add an "Ungrouped" section if there are apps naturally ungrouped
+                                                                const ungroupedApps = userApps.filter(app => !app.plant_name || (!allPlantNames.has(app.plant_name) && app.plant_name !== 'Ungrouped'));
+
                                                                 if (ungroupedApps.length > 0) {
                                                                     plantsToRender.push({
                                                                         name: 'Ungrouped / Heritage',
@@ -1243,11 +1288,20 @@ const AdminDashboard: React.FC = () => {
                                                                     });
                                                                 }
 
+                                                                if (plantsToRender.length === 0 && userOrphanDevices.length === 0) {
+                                                                    return (
+                                                                        <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center text-slate-400 italic">
+                                                                            No plants or applications configured yet.
+                                                                        </div>
+                                                                    );
+                                                                }
+
                                                                 return (
                                                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                                                         {plantsToRender.map((plant) => {
                                                                             const hasCerts = plant.certs && Object.keys(plant.certs || {}).length === 3;
-                                                                            const plantDeviceCount = plant.apps.reduce((sum, app) => sum + (app.device_count || 0), 0);
+                                                                            const plantOrphans = userOrphanDevices.filter((d: any) => d.plant_name === plant.name);
+                                                                            const plantDeviceCount = plant.apps.reduce((sum, app) => sum + (app.device_count || 0), 0) + plantOrphans.length;
 
                                                                             return (
                                                                                 <div key={plant.name} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col group/plant shadow-slate-200/50">
@@ -1349,10 +1403,36 @@ const AdminDashboard: React.FC = () => {
                                                                                                 </div>
                                                                                             )}
                                                                                         </div>
+
+                                                                                        {plantOrphans && plantOrphans.length > 0 && (
+                                                                                            <div className="mt-3 p-3 bg-orange-50/50 rounded-xl border border-orange-100/50 shadow-inner">
+                                                                                                <div className="flex items-center justify-between mb-2">
+                                                                                                    <div className="flex items-center gap-1.5">
+                                                                                                        <AlertCircle size={10} className="text-orange-500" />
+                                                                                                        <span className="text-[10px] font-bold text-orange-600 uppercase tracking-widest">Unassigned Devices</span>
+                                                                                                    </div>
+                                                                                                    <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-md">{plantOrphans.length}</span>
+                                                                                                </div>
+                                                                                                <div className="space-y-1.5">
+                                                                                                    {plantOrphans.map((device: any) => (
+                                                                                                        <div key={device._id} className="bg-white p-2 rounded-lg border border-orange-100 flex items-center justify-between group/mini-dev">
+                                                                                                            <div className="flex flex-col">
+                                                                                                                <span className="text-[10px] font-bold text-slate-700">{device.name}</span>
+                                                                                                                <span className="text-[8px] text-slate-400 font-mono tracking-tighter">{device.device_id_string}</span>
+                                                                                                            </div>
+                                                                                                            <div className="flex items-center gap-1 opacity-0 group-hover/mini-dev:opacity-100 transition-opacity">
+                                                                                                                <button onClick={(e) => { e.stopPropagation(); handleDeleteDevice(device._id); }} className="p-1 text-slate-300 hover:text-red-500"><Trash2 size={10} /></button>
+                                                                                                            </div>
+                                                                                                        </div>
+                                                                                                    ))}
+                                                                                                </div>
+                                                                                            </div>
+                                                                                        )}
+
                                                                                     </div>
 
                                                                                     {/* App Details nested expands */}
-                                                                                    {plant.apps.some(a => a._id === expandedApp) && (
+                                                                                    {plant.apps.some((a: any) => a._id === expandedApp) && (
                                                                                         <div className="px-4 pb-4 animate-in slide-in-from-top-2">
                                                                                             <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
                                                                                                 <div className="flex items-center justify-between mb-2">
@@ -1385,8 +1465,41 @@ const AdminDashboard: React.FC = () => {
                                                                         })}
                                                                     </div>
                                                                 );
-                                                            })()
-}
+                                                            })()}
+
+                                                            {/* Unassigned / Orphan Devices (Global fallback for older devices missing plant_name) */}
+                                                            {(() => {
+                                                                const globalOrphans = userOrphanDevices.filter((d: any) => !d.plant_name);
+                                                                if (globalOrphans.length === 0) return null;
+
+                                                                return (
+                                                                    <div className="p-6 border-t border-slate-100 bg-orange-50/20">
+                                                                        <div className="flex items-center justify-between mb-4">
+                                                                            <div className="flex items-center gap-2">
+                                                                                <div className="w-5 h-5 rounded-full bg-orange-100/50 flex items-center justify-center text-orange-600">
+                                                                                    <AlertCircle size={10} />
+                                                                                </div>
+                                                                                <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Global Unassigned Devices</h4>
+                                                                            </div>
+                                                                            <span className="text-xs font-bold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">{globalOrphans.length} Orphaned</span>
+                                                                        </div>
+                                                                        <div className="space-y-1.5">
+                                                                            {globalOrphans.map((device: any) => (
+                                                                                <div key={device._id} className="bg-white p-2.5 rounded-xl border border-orange-100/50 flex items-center justify-between group/mini-dev shadow-sm transition-all hover:shadow-md">
+                                                                                    <div className="flex flex-col">
+                                                                                        <span className="text-xs font-bold text-slate-700">{device.name}</span>
+                                                                                        <span className="text-[9px] text-slate-400 font-mono tracking-tighter">{device.device_id_string}</span>
+                                                                                    </div>
+                                                                                    <div className="flex items-center gap-1 opacity-0 group-hover/mini-dev:opacity-100 transition-opacity">
+                                                                                        <button onClick={() => handleDeleteDevice(device._id)} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={12} /></button>
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })()}
+
                                                             {/* User Certificates */}
                                                             {userCerts && userCerts.length > 0 && (
                                                                 <div className="p-6 border-t border-slate-100 bg-slate-50/50">
@@ -1395,28 +1508,71 @@ const AdminDashboard: React.FC = () => {
                                                                             <Download size={10} />
                                                                         </div>
                                                                         <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Generated Certificates</h4>
+                                                                        <span className="ml-auto text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{userCerts.length} total</span>
                                                                     </div>
                                                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                                        {userCerts.map((cert: any) => (
-                                                                            <div key={cert._id} className="bg-white border border-slate-100 rounded-xl p-3 flex justify-between items-center group shadow-sm hover:shadow-md transition-all">
-                                                                                <div className="flex flex-col">
-                                                                                    <span className="text-xs font-bold text-slate-700">{cert.device_name || 'Device'}</span>
-                                                                                    <span className="text-[9px] text-slate-400 font-mono tracking-wider">{cert.device_id_string || cert.filename}</span>
+                                                                        {userCerts.map((cert: any) => {
+                                                                            const hasZip = cert.has_zip_data === true;
+                                                                            const createdAt = cert.created_at_iso
+                                                                                ? new Date(cert.created_at_iso)
+                                                                                : cert.created_at
+                                                                                    ? new Date(cert.created_at)
+                                                                                    : null;
+                                                                            const formattedDate = createdAt
+                                                                                ? createdAt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                                                                                : '—';
+                                                                            const formattedTime = createdAt
+                                                                                ? createdAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+                                                                                : '';
+                                                                            return (
+                                                                                <div key={cert._id} className={cn(
+                                                                                    "bg-white border rounded-xl p-3 flex flex-col gap-2 shadow-sm transition-all",
+                                                                                    hasZip ? "border-slate-100 hover:shadow-md" : "border-dashed border-slate-200 opacity-70"
+                                                                                )}>
+                                                                                    <div className="flex items-start justify-between">
+                                                                                        <div className="flex flex-col flex-1 min-w-0">
+                                                                                            <span className="text-xs font-bold text-slate-700 truncate">{cert.device_name || 'Unknown Device'}</span>
+                                                                                            <span className="text-[9px] text-slate-400 font-mono tracking-wider truncate">{cert.device_id_string || cert.filename}</span>
+                                                                                        </div>
+                                                                                        <button
+                                                                                            onClick={() => hasZip ? handleDownloadCert(cert._id, cert.filename) : alert('This certificate was generated before file storage was enabled. Please re-provision this device to get a downloadable package.')}
+                                                                                            className={cn(
+                                                                                                "ml-2 p-2 rounded-lg transition-all flex-shrink-0",
+                                                                                                hasZip
+                                                                                                    ? "text-slate-400 hover:text-purple-600 hover:bg-purple-50 cursor-pointer"
+                                                                                                    : "text-slate-200 cursor-not-allowed bg-slate-50"
+                                                                                            )}
+                                                                                            title={hasZip ? `Download ${cert.filename}` : 'No file stored — re-provision to download'}
+                                                                                        >
+                                                                                            <Download size={14} />
+                                                                                        </button>
+                                                                                    </div>
+                                                                                    <div className="flex items-center justify-between gap-2">
+                                                                                        <div className="flex flex-col">
+                                                                                            <span className="text-xs font-bold text-slate-600">{formattedDate}</span>
+                                                                                            <span className="text-[10px] text-slate-400">{formattedTime}</span>
+                                                                                        </div>
+                                                                                        <div className="flex items-center gap-1">
+                                                                                            {cert.plant_name && (
+                                                                                                <span className="text-[8px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-md uppercase tracking-wider">{cert.plant_name}</span>
+                                                                                            )}
+                                                                                            <span className={cn(
+                                                                                                "text-[8px] font-bold px-1.5 py-0.5 rounded-md uppercase tracking-wider",
+                                                                                                hasZip ? "text-emerald-700 bg-emerald-50" : "text-orange-600 bg-orange-50"
+                                                                                            )}>
+                                                                                                {hasZip ? '● Downloadable' : '○ No File'}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                    </div>
                                                                                 </div>
-                                                                                <button
-                                                                                    onClick={() => handleDownloadCert(cert._id, cert.filename)}
-                                                                                    className="p-2 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-all"
-                                                                                    title="Download Zip"
-                                                                                >
-                                                                                    <Download size={14} />
-                                                                                </button>
-                                                                            </div>
-                                                                        ))}
+                                                                            );
+                                                                        })}
                                                                     </div>
                                                                 </div>
                                                             )}
                                                         </div>
-                                                    )}
+                                                    )
+                                                    }
                                                 </div>
                                             );
                                         })
@@ -1426,7 +1582,7 @@ const AdminDashboard: React.FC = () => {
                         )}
                     </div>
                 </div>
-            </main>
+            </main >
 
             {editingUser && (
                 <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1505,540 +1661,583 @@ const AdminDashboard: React.FC = () => {
                     </div>
                 </div>
             )}
-            {addingAppToUser && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200 flex flex-col">
-                        <div className="p-8 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
-                            <div>
-                                <h3 className="text-xl font-bold text-slate-900">Add New Application</h3>
-                                <p className="text-sm text-slate-500">Provision a new application and its devices for this user.</p>
-                            </div>
-                            <button
-                                onClick={() => setAddingAppToUser(null)}
-                                className="p-2 hover:bg-slate-100 rounded-full transition-colors"
-                            >
-                                <LogOut size={20} className="rotate-180" />
-                            </button>
-                        </div>
-
-                        <div className="p-8 space-y-8 flex-1">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="space-y-2">
-                                    <label className="text-sm font-bold text-slate-700">Application Name</label>
-                                    <input
-                                        type="text"
-                                        placeholder="e.g. Smart Farm V1"
-                                        value={newAppForm.name}
-                                        onChange={e => setNewAppForm(prev => ({ ...prev, name: e.target.value }))}
-                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white"
-                                    />
+            {
+                addingAppToUser && (
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200 flex flex-col">
+                            <div className="p-8 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
+                                <div>
+                                    <h3 className="text-xl font-bold text-slate-900">Add New Application</h3>
+                                    <p className="text-sm text-slate-500">Provision a new application and its devices for this user.</p>
                                 </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-bold text-slate-700">Assign to Plant</label>
-                                    <select
-                                        value={newAppForm.plant_name}
-                                        onChange={e => setNewAppForm(prev => ({ ...prev, plant_name: e.target.value }))}
-                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white font-semibold"
-                                    >
-                                        <option value="">Select a Plant (Optional)</option>
-                                        {userStats[addingAppToUser.customerId]?.plant_certs?.map((pc: any) => (
-                                            <option key={pc.plant_name} value={pc.plant_name}>
-                                                {pc.plant_name}
-                                            </option>
+                                <button
+                                    onClick={() => setAddingAppToUser(null)}
+                                    className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                                >
+                                    <LogOut size={20} className="rotate-180" />
+                                </button>
+                            </div>
+
+                            <div className="p-8 space-y-8 flex-1">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700">Application Name</label>
+                                        <input
+                                            type="text"
+                                            placeholder="e.g. Smart Farm V1"
+                                            value={newAppForm.name}
+                                            onChange={e => setNewAppForm(prev => ({ ...prev, name: e.target.value }))}
+                                            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700">Assign to Plant</label>
+                                        <select
+                                            value={newAppForm.plant_name}
+                                            onChange={e => setNewAppForm(prev => ({ ...prev, plant_name: e.target.value }))}
+                                            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white font-semibold"
+                                        >
+                                            <option value="">Select a Plant (Optional)</option>
+                                            {userStats[addingAppToUser.customerId]?.plant_certs?.map((pc: any) => (
+                                                <option key={pc.plant_name} value={pc.plant_name}>
+                                                    {pc.plant_name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700">Application ID (Optional)</label>
+                                        <input
+                                            type="text"
+                                            placeholder="Manual ID"
+                                            value={newAppForm.manual_id}
+                                            onChange={e => setNewAppForm(prev => ({ ...prev, manual_id: e.target.value }))}
+                                            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4 pt-4 border-t border-slate-100">
+                                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Initial Devices</h3>
+                                    <div className="grid grid-cols-1 gap-4">
+                                        {newAppForm.devices.map((device, devIdx) => (
+                                            <div key={devIdx} className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100 relative group/dev">
+                                                {devIdx > 0 && (
+                                                    <button
+                                                        onClick={() => {
+                                                            const newDevs = [...newAppForm.devices];
+                                                            newDevs.splice(devIdx, 1);
+                                                            setNewAppForm(prev => ({ ...prev, devices: newDevs }));
+                                                        }}
+                                                        className="absolute -top-2 -right-2 w-5 h-5 bg-red-50 text-red-500 rounded-full flex items-center justify-center hover:bg-red-100 opacity-0 group-hover/dev:opacity-100 transition-opacity"
+                                                    >
+                                                        ×
+                                                    </button>
+                                                )}
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-bold text-slate-400 uppercase">Name</label>
+                                                    <input
+                                                        type="text"
+                                                        value={device.name}
+                                                        onChange={e => {
+                                                            const newDevs = [...newAppForm.devices];
+                                                            newDevs[devIdx].name = e.target.value;
+                                                            setNewAppForm(prev => ({ ...prev, devices: newDevs }));
+                                                        }}
+                                                        className="w-full px-3 py-2 rounded-lg border border-slate-100 text-xs focus:ring-1 focus:ring-blue-500"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-bold text-slate-400 uppercase">Serial / ID</label>
+                                                    <input
+                                                        type="text"
+                                                        value={device.device_id}
+                                                        onChange={e => {
+                                                            const newDevs = [...newAppForm.devices];
+                                                            newDevs[devIdx].device_id = e.target.value;
+                                                            setNewAppForm(prev => ({ ...prev, devices: newDevs }));
+                                                        }}
+                                                        className="w-full px-3 py-2 rounded-lg border border-slate-100 text-xs focus:ring-1 focus:ring-blue-500"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-bold text-slate-400 uppercase">Version</label>
+                                                    <input
+                                                        type="text"
+                                                        value={device.version}
+                                                        onChange={e => {
+                                                            const newDevs = [...newAppForm.devices];
+                                                            newDevs[devIdx].version = e.target.value;
+                                                            setNewAppForm(prev => ({ ...prev, devices: newDevs }));
+                                                        }}
+                                                        className="w-full px-3 py-2 rounded-lg border border-slate-100 text-xs focus:ring-1 focus:ring-blue-500"
+                                                    />
+                                                </div>
+                                            </div>
                                         ))}
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-bold text-slate-700">Application ID (Optional)</label>
-                                    <input
-                                        type="text"
-                                        placeholder="Manual ID"
-                                        value={newAppForm.manual_id}
-                                        onChange={e => setNewAppForm(prev => ({ ...prev, manual_id: e.target.value }))}
-                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white"
-                                    />
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setNewAppForm(prev => ({
+                                                    ...prev,
+                                                    devices: [...prev.devices, { name: '', device_id: '', version: '' }]
+                                                }));
+                                            }}
+                                            className="py-2 rounded-xl border border-dashed border-slate-200 text-slate-400 text-[10px] font-bold hover:bg-slate-50 hover:text-blue-500 transition-all"
+                                        >
+                                            + Add Another Device
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div className="space-y-4 pt-4 border-t border-slate-100">
-                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Initial Devices</h3>
-                                <div className="grid grid-cols-1 gap-4">
-                                    {newAppForm.devices.map((device, devIdx) => (
-                                        <div key={devIdx} className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100 relative group/dev">
-                                            {devIdx > 0 && (
-                                                <button
-                                                    onClick={() => {
-                                                        const newDevs = [...newAppForm.devices];
-                                                        newDevs.splice(devIdx, 1);
-                                                        setNewAppForm(prev => ({ ...prev, devices: newDevs }));
-                                                    }}
-                                                    className="absolute -top-2 -right-2 w-5 h-5 bg-red-50 text-red-500 rounded-full flex items-center justify-center hover:bg-red-100 opacity-0 group-hover/dev:opacity-100 transition-opacity"
-                                                >
-                                                    ×
-                                                </button>
-                                            )}
-                                            <div className="space-y-1">
-                                                <label className="text-[10px] font-bold text-slate-400 uppercase">Name</label>
-                                                <input
-                                                    type="text"
-                                                    value={device.name}
-                                                    onChange={e => {
-                                                        const newDevs = [...newAppForm.devices];
-                                                        newDevs[devIdx].name = e.target.value;
-                                                        setNewAppForm(prev => ({ ...prev, devices: newDevs }));
-                                                    }}
-                                                    className="w-full px-3 py-2 rounded-lg border border-slate-100 text-xs focus:ring-1 focus:ring-blue-500"
-                                                />
-                                            </div>
-                                            <div className="space-y-1">
-                                                <label className="text-[10px] font-bold text-slate-400 uppercase">Serial / ID</label>
-                                                <input
-                                                    type="text"
-                                                    value={device.device_id}
-                                                    onChange={e => {
-                                                        const newDevs = [...newAppForm.devices];
-                                                        newDevs[devIdx].device_id = e.target.value;
-                                                        setNewAppForm(prev => ({ ...prev, devices: newDevs }));
-                                                    }}
-                                                    className="w-full px-3 py-2 rounded-lg border border-slate-100 text-xs focus:ring-1 focus:ring-blue-500"
-                                                />
-                                            </div>
-                                            <div className="space-y-1">
-                                                <label className="text-[10px] font-bold text-slate-400 uppercase">Version</label>
-                                                <input
-                                                    type="text"
-                                                    value={device.version}
-                                                    onChange={e => {
-                                                        const newDevs = [...newAppForm.devices];
-                                                        newDevs[devIdx].version = e.target.value;
-                                                        setNewAppForm(prev => ({ ...prev, devices: newDevs }));
-                                                    }}
-                                                    className="w-full px-3 py-2 rounded-lg border border-slate-100 text-xs focus:ring-1 focus:ring-blue-500"
-                                                />
-                                            </div>
-                                        </div>
-                                    ))}
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setNewAppForm(prev => ({
-                                                ...prev,
-                                                devices: [...prev.devices, { name: '', device_id: '', version: '' }]
-                                            }));
-                                        }}
-                                        className="py-2 rounded-xl border border-dashed border-slate-200 text-slate-400 text-[10px] font-bold hover:bg-slate-50 hover:text-blue-500 transition-all"
-                                    >
-                                        + Add Another Device
-                                    </button>
-                                </div>
+                            <div className="p-8 border-t border-slate-100 bg-slate-50/50 flex gap-4 sticky bottom-0 z-10">
+                                <button
+                                    onClick={() => setAddingAppToUser(null)}
+                                    className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleSaveNewApp}
+                                    disabled={isSubmitting}
+                                    className={cn(
+                                        "flex-[2] px-6 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2",
+                                        isSubmitting && "opacity-70 cursor-not-allowed"
+                                    )}
+                                >
+                                    {isSubmitting ? <RefreshCw size={18} className="animate-spin" /> : "Save Application Setup"}
+                                </button>
                             </div>
-                        </div>
-
-                        <div className="p-8 border-t border-slate-100 bg-slate-50/50 flex gap-4 sticky bottom-0 z-10">
-                            <button
-                                onClick={() => setAddingAppToUser(null)}
-                                className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleSaveNewApp}
-                                disabled={isSubmitting}
-                                className={cn(
-                                    "flex-[2] px-6 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2",
-                                    isSubmitting && "opacity-70 cursor-not-allowed"
-                                )}
-                            >
-                                {isSubmitting ? <RefreshCw size={18} className="animate-spin" /> : "Save Application Setup"}
-                            </button>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Add Device Modal */}
-            {addingDeviceToApp && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md animate-in zoom-in-95 duration-200">
-                        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                            <div>
-                                <h3 className="text-lg font-bold text-slate-900">Add New Device</h3>
-                                <p className="text-xs text-slate-400 mt-0.5">Fill in the device details below.</p>
+            {
+                addingDeviceToApp && (
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md animate-in zoom-in-95 duration-200">
+                            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                                <div>
+                                    <h3 className="text-lg font-bold text-slate-900">Add New Device</h3>
+                                    <p className="text-xs text-slate-400 mt-0.5">Fill in the device details below.</p>
+                                </div>
+                                <button onClick={() => setAddingDeviceToApp(null)} className="p-2 hover:bg-slate-100 text-slate-400 rounded-full transition-colors">
+                                    <LogOut size={20} className="rotate-180" />
+                                </button>
                             </div>
-                            <button onClick={() => setAddingDeviceToApp(null)} className="p-2 hover:bg-slate-100 text-slate-400 rounded-full transition-colors">
-                                <LogOut size={20} className="rotate-180" />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold text-slate-700">Device Name <span className="text-red-500">*</span></label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. Sensor Node Alpha"
-                                    value={newDeviceForm.name}
-                                    onChange={e => setNewDeviceForm(prev => ({ ...prev, name: e.target.value }))}
-                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm transition-all"
-                                />
+                            <div className="p-6 space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-semibold text-slate-700">Device Name <span className="text-red-500">*</span></label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. Sensor Node Alpha"
+                                        value={newDeviceForm.name}
+                                        onChange={e => setNewDeviceForm(prev => ({ ...prev, name: e.target.value }))}
+                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm transition-all"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-semibold text-slate-700">Device ID / Serial <span className="text-red-500">*</span></label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. SN-00123456"
+                                        value={newDeviceForm.device_id}
+                                        onChange={e => setNewDeviceForm(prev => ({ ...prev, device_id: e.target.value }))}
+                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm transition-all"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-semibold text-slate-700">Version</label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. v1.0.0"
+                                        value={newDeviceForm.version}
+                                        onChange={e => setNewDeviceForm(prev => ({ ...prev, version: e.target.value }))}
+                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm transition-all"
+                                    />
+                                </div>
                             </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold text-slate-700">Device ID / Serial <span className="text-red-500">*</span></label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. SN-00123456"
-                                    value={newDeviceForm.device_id}
-                                    onChange={e => setNewDeviceForm(prev => ({ ...prev, device_id: e.target.value }))}
-                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm transition-all"
-                                />
+                            <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-4 rounded-b-3xl">
+                                <button onClick={() => setAddingDeviceToApp(null)} className="flex-1 px-4 py-2 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all">Cancel</button>
+                                <button
+                                    onClick={handleSaveNewDevice}
+                                    disabled={isSubmitting}
+                                    className="flex-1 px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold shadow-lg shadow-indigo-500/30 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-70"
+                                >
+                                    {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : "Add Device"}
+                                </button>
                             </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold text-slate-700">Version</label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. v1.0.0"
-                                    value={newDeviceForm.version}
-                                    onChange={e => setNewDeviceForm(prev => ({ ...prev, version: e.target.value }))}
-                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm transition-all"
-                                />
-                            </div>
-                        </div>
-                        <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-4 rounded-b-3xl">
-                            <button onClick={() => setAddingDeviceToApp(null)} className="flex-1 px-4 py-2 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all">Cancel</button>
-                            <button
-                                onClick={handleSaveNewDevice}
-                                disabled={isSubmitting}
-                                className="flex-1 px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold shadow-lg shadow-indigo-500/30 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-70"
-                            >
-                                {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : "Add Device"}
-                            </button>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Edit Plant Modal */}
-            {editingPlant && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200">
-                        <div className="p-8 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
-                                    <Shield size={24} />
+            {
+                editingPlant && (
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200">
+                            <div className="p-8 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                                        <Shield size={24} />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-bold text-slate-900">Edit Plant Configuration</h3>
+                                        <p className="text-sm text-slate-500">Update naming, certificates, and applications for this plant.</p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <h3 className="text-xl font-bold text-slate-900">Edit Plant Configuration</h3>
-                                    <p className="text-sm text-slate-500">Update naming, certificates, and applications for this plant.</p>
+                                <button onClick={() => setEditingPlant(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                                    <LogOut size={20} className="rotate-180" />
+                                </button>
+                            </div>
+
+                            <div className="p-8 space-y-10">
+                                {/* Plant Header Info */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div className="space-y-3">
+                                        <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                                            <Activity size={16} className="text-blue-500" />
+                                            Plant Name
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={editingPlant.plantName}
+                                            onChange={e => {
+                                                const oldName = (editingPlant as any).originalName || editingPlant.plantName;
+                                                setEditingPlant({ ...editingPlant, plantName: e.target.value, originalName: oldName } as any);
+                                            }}
+                                            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-semibold"
+                                        />
+                                    </div>
+                                    <div className="space-y-3">
+                                        <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                                            <Server size={16} className="text-blue-500" />
+                                            Infrastructure Status
+                                        </label>
+                                        <div className="px-4 py-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
+                                            <span className="text-sm font-medium text-slate-600">Applications found:</span>
+                                            <span className="text-sm font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-lg">{editingPlant.apps.length}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Certificate Section */}
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Certificate Management</h4>
+                                        <div className="flex items-center gap-2">
+                                            <CheckCircle size={12} className="text-emerald-500" />
+                                            <span className="text-[10px] font-bold text-emerald-600">Cloud Sync Active</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        {['crt', 'key', 'srl'].map(ext => {
+                                            const hasFile = editingPlant.certPaths?.[ext];
+                                            return (
+                                                <div key={ext} className="p-4 bg-white rounded-2xl border border-slate-100 shadow-sm space-y-3 relative group/cert">
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-xs font-bold text-slate-500 uppercase">{ext} File</span>
+                                                        {hasFile ? (
+                                                            <CheckCircle size={16} className="text-emerald-500" />
+                                                        ) : (
+                                                            <AlertCircle size={16} className="text-amber-500" />
+                                                        )}
+                                                    </div>
+                                                    <div className="text-[10px] text-slate-400 font-medium truncate">
+                                                        {hasFile ? "ca." + ext : "No file uploaded yet"}
+                                                    </div>
+                                                    <input
+                                                        type="file"
+                                                        id={`edit-cert-${ext}`}
+                                                        className="hidden"
+                                                        accept={`.${ext}`}
+                                                        onChange={e => {
+                                                            const file = e.target.files?.[0];
+                                                            if (file) {
+                                                                const currentFiles = (editingPlant as any).newFiles || {};
+                                                                setEditingPlant({ ...editingPlant, newFiles: { ...currentFiles, [ext]: file } } as any);
+                                                            }
+                                                        }}
+                                                    />
+                                                    <label
+                                                        htmlFor={`edit-cert-${ext}`}
+                                                        className="w-full py-2 bg-slate-50 text-slate-600 rounded-lg text-[10px] font-bold border border-slate-100 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-100 transition-all cursor-pointer flex items-center justify-center gap-2"
+                                                    >
+                                                        {(editingPlant as any).newFiles?.[ext] ? "File Selected" : "Replace File"}
+                                                    </label>
+                                                    {(editingPlant as any).newFiles?.[ext] && (
+                                                        <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full border-2 border-white shadow-sm"></div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* Applications List */}
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Associated Applications</h4>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const nextApps = [
+                                                    ...editingPlant.apps,
+                                                    {
+                                                        _id: `new-${Date.now()}`,
+                                                        name: '',
+                                                        manual_id: '',
+                                                        plant_name: editingPlant.plantName
+                                                    }
+                                                ];
+                                                setEditingPlant({ ...editingPlant, apps: nextApps });
+                                            }}
+                                            className="text-[10px] font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-xl hover:bg-blue-100 transition-all"
+                                        >
+                                            + New App
+                                        </button>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        {editingPlant.apps.filter(app => !app._deleted).map((app, appIdx) => (
+                                            <div key={app._id || appIdx} className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 space-y-4">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="flex-1 space-y-1">
+                                                        <label className="text-[10px] font-bold text-slate-400 uppercase">App Name</label>
+                                                        <input
+                                                            type="text"
+                                                            value={app.name}
+                                                            onChange={e => {
+                                                                const newApps = [...editingPlant.apps];
+                                                                newApps[appIdx] = { ...app, name: e.target.value };
+                                                                setEditingPlant({ ...editingPlant, apps: newApps });
+                                                            }}
+                                                            className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold focus:ring-1 focus:ring-blue-500"
+                                                        />
+                                                    </div>
+                                                    <div className="flex-1 space-y-1">
+                                                        <label className="text-[10px] font-bold text-slate-400 uppercase">App ID</label>
+                                                        <input
+                                                            type="text"
+                                                            value={app.manual_id || ''}
+                                                            onChange={e => {
+                                                                const newApps = [...editingPlant.apps];
+                                                                newApps[appIdx] = { ...app, manual_id: e.target.value };
+                                                                setEditingPlant({ ...editingPlant, apps: newApps });
+                                                            }}
+                                                            className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold focus:ring-1 focus:ring-blue-500"
+                                                        />
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const nextApps = editingPlant.apps.map((candidate) =>
+                                                                candidate._id === app._id ? { ...candidate, _deleted: true } : candidate
+                                                            );
+                                                            setEditingPlant({ ...editingPlant, apps: nextApps });
+                                                        }}
+                                                        className="self-end p-2 text-slate-300 hover:text-red-500 transition-colors"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {editingPlant.apps.filter(app => !app._deleted).length === 0 && (
+                                            <div className="py-8 text-center text-sm text-slate-400 italic bg-slate-50 rounded-2xl border border-slate-100">
+                                                No applications configured for this plant.
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
-                            <button onClick={() => setEditingPlant(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                                <LogOut size={20} className="rotate-180" />
-                            </button>
-                        </div>
 
-                        <div className="p-8 space-y-10">
-                            {/* Plant Header Info */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                <div className="space-y-3">
+                            <div className="p-8 border-t border-slate-100 bg-slate-50 sticky bottom-0 z-10 flex gap-4">
+                                <button
+                                    onClick={() => setEditingPlant(null)}
+                                    className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleSaveEditPlant}
+                                    disabled={isSubmitting}
+                                    className={cn(
+                                        "flex-[2] px-6 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2",
+                                        isSubmitting && "opacity-70 cursor-not-allowed"
+                                    )}
+                                >
+                                    {isSubmitting ? <RefreshCw size={20} className="animate-spin" /> : "Save Plant Settings"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+            {/* Edit Application Modal */}
+            {
+                editingApp && (
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md animate-in zoom-in-95 duration-200">
+                            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                                <h3 className="text-lg font-bold text-slate-900">Edit Application</h3>
+                                <button onClick={() => setEditingApp(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                                    <LogOut size={20} className="rotate-180" />
+                                </button>
+                            </div>
+                            <div className="p-6 space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-semibold text-slate-700">Application Name</label>
+                                    <input type="text" value={editAppForm.name} onChange={e => setEditAppForm(prev => ({ ...prev, name: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-semibold text-slate-700">Manual ID</label>
+                                    <input type="text" value={editAppForm.manual_id} onChange={e => setEditAppForm(prev => ({ ...prev, manual_id: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
+                                </div>
+                            </div>
+                            <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-4 rounded-b-3xl">
+                                <button onClick={() => setEditingApp(null)} className="flex-1 px-4 py-2 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all">Cancel</button>
+                                <button onClick={handleSaveEditApp} disabled={isSubmitting} className={cn("flex-1 px-4 py-2 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2", isSubmitting && "opacity-70 cursor-not-allowed")}>{isSubmitting ? <RefreshCw size={16} className="animate-spin" /> : "Save"}</button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {/* Edit Device Modal */}
+            {
+                editingDevice && (
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md animate-in zoom-in-95 duration-200">
+                            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                                <h3 className="text-lg font-bold text-slate-900">Edit Device</h3>
+                                <button onClick={() => setEditingDevice(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                                    <LogOut size={20} className="rotate-180" />
+                                </button>
+                            </div>
+                            <div className="p-6 space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-semibold text-slate-700">Device Name</label>
+                                    <input type="text" value={editDeviceForm.name} onChange={e => setEditDeviceForm(prev => ({ ...prev, name: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-semibold text-slate-700">Serial / ID</label>
+                                    <input type="text" value={editDeviceForm.device_id_string} onChange={e => setEditDeviceForm(prev => ({ ...prev, device_id_string: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-semibold text-slate-700">Version</label>
+                                    <input type="text" value={editDeviceForm.version} onChange={e => setEditDeviceForm(prev => ({ ...prev, version: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
+                                </div>
+                            </div>
+                            <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-4 rounded-b-3xl">
+                                <button onClick={() => setEditingDevice(null)} className="flex-1 px-4 py-2 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all">Cancel</button>
+                                <button onClick={handleSaveEditDevice} disabled={isSubmitting} className={cn("flex-1 px-4 py-2 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2", isSubmitting && "opacity-70 cursor-not-allowed")}>{isSubmitting ? <RefreshCw size={16} className="animate-spin" /> : "Save"}</button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+            {/* Add Plant Modal */}
+            {
+                addingPlantToUser && (
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg animate-in zoom-in-95 duration-200">
+                            <div className="p-8 border-b border-slate-100 flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                                        <Shield size={24} />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-bold text-slate-900">Add New Plant</h3>
+                                        <p className="text-sm text-slate-500">Configure new infrastructure for this organization.</p>
+                                    </div>
+                                </div>
+                                <button onClick={() => setAddingPlantToUser(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                                    <LogOut size={20} className="rotate-180" />
+                                </button>
+                            </div>
+
+                            <div className="p-8 space-y-6">
+                                <div className="space-y-2">
                                     <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
                                         <Activity size={16} className="text-blue-500" />
                                         Plant Name
                                     </label>
                                     <input
                                         type="text"
-                                        value={editingPlant.plantName}
-                                        onChange={e => {
-                                            const oldName = (editingPlant as any).originalName || editingPlant.plantName;
-                                            setEditingPlant({ ...editingPlant, plantName: e.target.value, originalName: oldName } as any);
-                                        }}
+                                        placeholder="e.g. Frankfurt Data Center"
+                                        value={newPlantForm.name}
+                                        onChange={e => setNewPlantForm({ ...newPlantForm, name: e.target.value })}
                                         className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-semibold"
                                     />
                                 </div>
-                                <div className="space-y-3">
-                                    <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                                        <Server size={16} className="text-blue-500" />
-                                        Infrastructure Status
-                                    </label>
-                                    <div className="px-4 py-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
-                                        <span className="text-sm font-medium text-slate-600">Applications found:</span>
-                                        <span className="text-sm font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-lg">{editingPlant.apps.length}</span>
-                                    </div>
-                                </div>
-                            </div>
 
-                            {/* Certificate Section */}
-                            <div className="space-y-4">
-                                <div className="flex items-center justify-between">
-                                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Certificate Management</h4>
-                                    <div className="flex items-center gap-2">
-                                        <CheckCircle size={12} className="text-emerald-500" />
-                                        <span className="text-[10px] font-bold text-emerald-600">Cloud Sync Active</span>
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    {['crt', 'key', 'srl'].map(ext => {
-                                        const hasFile = editingPlant.certPaths?.[ext];
-                                        return (
-                                            <div key={ext} className="p-4 bg-white rounded-2xl border border-slate-100 shadow-sm space-y-3 relative group/cert">
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-xs font-bold text-slate-500 uppercase">{ext} File</span>
-                                                    {hasFile ? (
-                                                        <CheckCircle size={16} className="text-emerald-500" />
-                                                    ) : (
-                                                        <AlertCircle size={16} className="text-amber-500" />
-                                                    )}
-                                                </div>
-                                                <div className="text-[10px] text-slate-400 font-medium truncate">
-                                                    {hasFile ? "ca." + ext : "No file uploaded yet"}
+                                <div className="space-y-4 pt-4 border-t border-slate-50">
+                                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Initial Certificates</h4>
+                                    <div className="grid grid-cols-1 gap-4">
+                                        {['crt', 'key', 'srl'].map((ext) => (
+                                            <div key={ext} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                                <div className="flex flex-col">
+                                                    <span className="text-xs font-bold text-slate-600 uppercase">.{ext} File</span>
+                                                    <span className="text-[10px] text-slate-400">
+                                                        {(newPlantForm.certFiles as any)[ext]?.name || "Not selected"}
+                                                    </span>
                                                 </div>
                                                 <input
                                                     type="file"
-                                                    id={`edit-cert-${ext}`}
+                                                    id={`new-plant-${ext}`}
                                                     className="hidden"
                                                     accept={`.${ext}`}
                                                     onChange={e => {
                                                         const file = e.target.files?.[0];
                                                         if (file) {
-                                                            const currentFiles = (editingPlant as any).newFiles || {};
-                                                            setEditingPlant({ ...editingPlant, newFiles: { ...currentFiles, [ext]: file } } as any);
+                                                            setNewPlantForm({
+                                                                ...newPlantForm,
+                                                                certFiles: { ...newPlantForm.certFiles, [ext]: file }
+                                                            });
                                                         }
                                                     }}
                                                 />
                                                 <label
-                                                    htmlFor={`edit-cert-${ext}`}
-                                                    className="w-full py-2 bg-slate-50 text-slate-600 rounded-lg text-[10px] font-bold border border-slate-100 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-100 transition-all cursor-pointer flex items-center justify-center gap-2"
+                                                    htmlFor={`new-plant-${ext}`}
+                                                    className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-blue-600 hover:bg-blue-50 transition-all cursor-pointer"
                                                 >
-                                                    {(editingPlant as any).newFiles?.[ext] ? "File Selected" : "Replace File"}
+                                                    Choose File
                                                 </label>
-                                                {(editingPlant as any).newFiles?.[ext] && (
-                                                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full border-2 border-white shadow-sm"></div>
-                                                )}
                                             </div>
-                                        );
-                                    })}
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
 
-                            {/* Applications List */}
-                            <div className="space-y-4">
-                                <div className="flex items-center justify-between">
-                                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Associated Applications</h4>
-                                    <button className="text-[10px] font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-xl hover:bg-blue-100 transition-all">+ New App</button>
-                                </div>
-
-                                <div className="space-y-3">
-                                    {editingPlant.apps.map((app, appIdx) => (
-                                        <div key={app._id || appIdx} className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 space-y-4">
-                                            <div className="flex items-center gap-4">
-                                                <div className="flex-1 space-y-1">
-                                                    <label className="text-[10px] font-bold text-slate-400 uppercase">App Name</label>
-                                                    <input
-                                                        type="text"
-                                                        value={app.name}
-                                                        onChange={e => {
-                                                            const newApps = [...editingPlant.apps];
-                                                            newApps[appIdx] = { ...app, name: e.target.value };
-                                                            setEditingPlant({ ...editingPlant, apps: newApps });
-                                                        }}
-                                                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold focus:ring-1 focus:ring-blue-500"
-                                                    />
-                                                </div>
-                                                <div className="flex-1 space-y-1">
-                                                    <label className="text-[10px] font-bold text-slate-400 uppercase">App ID</label>
-                                                    <input
-                                                        type="text"
-                                                        value={app.manual_id || ''}
-                                                        onChange={e => {
-                                                            const newApps = [...editingPlant.apps];
-                                                            newApps[appIdx] = { ...app, manual_id: e.target.value };
-                                                            setEditingPlant({ ...editingPlant, apps: newApps });
-                                                        }}
-                                                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold focus:ring-1 focus:ring-blue-500"
-                                                    />
-                                                </div>
-                                                <button className="self-end p-2 text-slate-300 hover:text-red-500 transition-colors">
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
+                            <div className="p-8 border-t border-slate-100 bg-slate-50 flex gap-4 rounded-b-3xl">
+                                <button
+                                    onClick={() => setAddingPlantToUser(null)}
+                                    className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleSaveNewPlant}
+                                    disabled={isSubmitting}
+                                    className={cn(
+                                        "flex-[2] px-6 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2",
+                                        isSubmitting && "opacity-70 cursor-not-allowed"
+                                    )}
+                                >
+                                    {isSubmitting ? <RefreshCw size={20} className="animate-spin" /> : "Create Plant"}
+                                </button>
                             </div>
-                        </div>
-
-                        <div className="p-8 border-t border-slate-100 bg-slate-50 sticky bottom-0 z-10 flex gap-4">
-                            <button
-                                onClick={() => setEditingPlant(null)}
-                                className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleSaveEditPlant}
-                                disabled={isSubmitting}
-                                className={cn(
-                                    "flex-[2] px-6 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2",
-                                    isSubmitting && "opacity-70 cursor-not-allowed"
-                                )}
-                            >
-                                {isSubmitting ? <RefreshCw size={20} className="animate-spin" /> : "Save Plant Settings"}
-                            </button>
                         </div>
                     </div>
-                </div>
-            )}
-            {/* Edit Application Modal */}
-            {editingApp && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md animate-in zoom-in-95 duration-200">
-                        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                            <h3 className="text-lg font-bold text-slate-900">Edit Application</h3>
-                            <button onClick={() => setEditingApp(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                                <LogOut size={20} className="rotate-180" />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold text-slate-700">Application Name</label>
-                                <input type="text" value={editAppForm.name} onChange={e => setEditAppForm(prev => ({ ...prev, name: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold text-slate-700">Manual ID</label>
-                                <input type="text" value={editAppForm.manual_id} onChange={e => setEditAppForm(prev => ({ ...prev, manual_id: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
-                            </div>
-                        </div>
-                        <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-4 rounded-b-3xl">
-                            <button onClick={() => setEditingApp(null)} className="flex-1 px-4 py-2 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all">Cancel</button>
-                            <button onClick={handleSaveEditApp} disabled={isSubmitting} className={cn("flex-1 px-4 py-2 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2", isSubmitting && "opacity-70 cursor-not-allowed")}>{isSubmitting ? <RefreshCw size={16} className="animate-spin" /> : "Save"}</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Edit Device Modal */}
-            {editingDevice && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md animate-in zoom-in-95 duration-200">
-                        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                            <h3 className="text-lg font-bold text-slate-900">Edit Device</h3>
-                            <button onClick={() => setEditingDevice(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                                <LogOut size={20} className="rotate-180" />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold text-slate-700">Device Name</label>
-                                <input type="text" value={editDeviceForm.name} onChange={e => setEditDeviceForm(prev => ({ ...prev, name: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold text-slate-700">Serial / ID</label>
-                                <input type="text" value={editDeviceForm.device_id_string} onChange={e => setEditDeviceForm(prev => ({ ...prev, device_id_string: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold text-slate-700">Version</label>
-                                <input type="text" value={editDeviceForm.version} onChange={e => setEditDeviceForm(prev => ({ ...prev, version: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm" />
-                            </div>
-                        </div>
-                        <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-4 rounded-b-3xl">
-                            <button onClick={() => setEditingDevice(null)} className="flex-1 px-4 py-2 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all">Cancel</button>
-                            <button onClick={handleSaveEditDevice} disabled={isSubmitting} className={cn("flex-1 px-4 py-2 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2", isSubmitting && "opacity-70 cursor-not-allowed")}>{isSubmitting ? <RefreshCw size={16} className="animate-spin" /> : "Save"}</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {/* Add Plant Modal */}
-            {addingPlantToUser && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg animate-in zoom-in-95 duration-200">
-                        <div className="p-8 border-b border-slate-100 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
-                                    <Shield size={24} />
-                                </div>
-                                <div>
-                                    <h3 className="text-xl font-bold text-slate-900">Add New Plant</h3>
-                                    <p className="text-sm text-slate-500">Configure new infrastructure for this organization.</p>
-                                </div>
-                            </div>
-                            <button onClick={() => setAddingPlantToUser(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                                <LogOut size={20} className="rotate-180" />
-                            </button>
-                        </div>
-
-                        <div className="p-8 space-y-6">
-                            <div className="space-y-2">
-                                <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                                    <Activity size={16} className="text-blue-500" />
-                                    Plant Name
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. Frankfurt Data Center"
-                                    value={newPlantForm.name}
-                                    onChange={e => setNewPlantForm({ ...newPlantForm, name: e.target.value })}
-                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-semibold"
-                                />
-                            </div>
-
-                            <div className="space-y-4 pt-4 border-t border-slate-50">
-                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Initial Certificates</h4>
-                                <div className="grid grid-cols-1 gap-4">
-                                    {['crt', 'key', 'srl'].map((ext) => (
-                                        <div key={ext} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                                            <div className="flex flex-col">
-                                                <span className="text-xs font-bold text-slate-600 uppercase">.{ext} File</span>
-                                                <span className="text-[10px] text-slate-400">
-                                                    {(newPlantForm.certFiles as any)[ext]?.name || "Not selected"}
-                                                </span>
-                                            </div>
-                                            <input
-                                                type="file"
-                                                id={`new-plant-${ext}`}
-                                                className="hidden"
-                                                accept={`.${ext}`}
-                                                onChange={e => {
-                                                    const file = e.target.files?.[0];
-                                                    if (file) {
-                                                        setNewPlantForm({
-                                                            ...newPlantForm,
-                                                            certFiles: { ...newPlantForm.certFiles, [ext]: file }
-                                                        });
-                                                    }
-                                                }}
-                                            />
-                                            <label
-                                                htmlFor={`new-plant-${ext}`}
-                                                className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-blue-600 hover:bg-blue-50 transition-all cursor-pointer"
-                                            >
-                                                Choose File
-                                            </label>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="p-8 border-t border-slate-100 bg-slate-50 flex gap-4 rounded-b-3xl">
-                            <button
-                                onClick={() => setAddingPlantToUser(null)}
-                                className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleSaveNewPlant}
-                                disabled={isSubmitting}
-                                className={cn(
-                                    "flex-[2] px-6 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2",
-                                    isSubmitting && "opacity-70 cursor-not-allowed"
-                                )}
-                            >
-                                {isSubmitting ? <RefreshCw size={20} className="animate-spin" /> : "Create Plant"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 };
 

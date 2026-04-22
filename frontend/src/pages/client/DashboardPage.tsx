@@ -1,31 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { FileKey, QrCode, Upload, LogOut, LayoutDashboard, X, Loader2, CheckCircle2, Download, Shield, HardDrive, AlertCircle, ChevronRight } from 'lucide-react';
+import { QrCode, Upload, LogOut, LayoutDashboard, X, Loader2, CheckCircle2, Download, Shield, HardDrive, AlertCircle, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { Html5Qrcode } from 'html5-qrcode';
 import conqueLogo from "@/assets/conque.png";
 
 const DashboardPage: React.FC = () => {
     const { logout, user } = useAuth();
     const navigate = useNavigate();
-    
+
     // UI State
-    const [isManualGenOpen, setIsManualGenOpen] = useState(false);
+    const [isScanning, setIsScanning] = useState(false);
+    const [showPlantSelector, setShowPlantSelector] = useState(false);
+    const [pendingOperation, setPendingOperation] = useState<'scan' | 'upload' | null>(null);
+    const [cameraError, setCameraError] = useState<string | null>(null);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [selectedPlantName, setSelectedPlantName] = useState<string | null>(null);
+    const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
+    const [selectedAppForPlant, setSelectedAppForPlant] = useState<Record<string, string>>({});
     const [lastGenerated, setLastGenerated] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [deviceDetails, setDeviceDetails] = useState<any | null>(null);
 
-    // Manual Form State
-    const [manualForm, setManualForm] = useState({
-        plant_name: '',
-        application_id: '',
-        device_name: '',
-        device_id_string: '',
-        endpoint_id: '',
-        app_version: '1.0'
-    });
 
     const [applications, setApplications] = useState<any[]>([]);
     const [devices, setDevices] = useState<any[]>([]);
@@ -79,39 +77,106 @@ const DashboardPage: React.FC = () => {
     };
 
     useEffect(() => {
-        return () => {
-            if (downloadUrl) {
-                window.URL.revokeObjectURL(downloadUrl);
+        let html5QrCode: Html5Qrcode | null = null;
+        let isSubscribed = true;
+
+        const startScanner = async () => {
+            if (!isScanning) return;
+
+            // Wait until the element is actually in the DOM
+            let attempts = 0;
+            while (attempts < 10 && !document.getElementById("qr-reader")) {
+                await new Promise(r => setTimeout(r, 100));
+                attempts++;
+            }
+
+            if (!document.getElementById("qr-reader") || !isSubscribed) return;
+
+            setCameraError(null);
+            try {
+                html5QrCode = new Html5Qrcode("qr-reader");
+                const devices = await Html5Qrcode.getCameras();
+
+                if (devices && devices.length > 0 && isSubscribed) {
+                    const cameraId = devices[0].id;
+                    await html5QrCode.start(
+                        cameraId,
+                        {
+                            fps: 10,
+                            qrbox: { width: 250, height: 250 },
+                        },
+                        (decodedText) => {
+                            if (isSubscribed) onScanSuccess(decodedText);
+                        },
+                        () => { }
+                    );
+                } else if (isSubscribed) {
+                    setCameraError("No cameras detected. Please ensure your camera is connected.");
+                }
+            } catch (err: any) {
+                console.error("Camera access error:", err);
+                if (!isSubscribed) return;
+
+                const errStr = err.toString();
+                if (errStr.includes("Permission")) {
+                    setCameraError("Camera access denied. Please click the camera icon in your browser address bar to allow access.");
+                } else if (errStr.includes("NotReadableError")) {
+                    setCameraError("Camera is already in use by another application or tab.");
+                } else {
+                    setCameraError("Failed to initialize camera. (" + errStr + ")");
+                }
             }
         };
-    }, [downloadUrl]);
 
-    const handleManualGenerate = async (e: React.FormEvent) => {
-        e.preventDefault();
+        startScanner();
+
+        return () => {
+            isSubscribed = false;
+            if (html5QrCode) {
+                const stopAndClear = async () => {
+                    try {
+                        if (html5QrCode?.isScanning) {
+                            await html5QrCode.stop();
+                        }
+                        await html5QrCode?.clear();
+                    } catch (e) {
+                        console.error("Cleanup error:", e);
+                    }
+                };
+                stopAndClear();
+            }
+        };
+    }, [isScanning]);
+
+    const onScanSuccess = async (decodedText: string) => {
+        setIsScanning(false);
+        await handleGenerateCertificate(decodedText);
+    };
+
+    const handleGenerateCertificate = async (qrData: string) => {
         setIsGenerating(true);
         setError(null);
         setLastGenerated(null);
         setDownloadUrl(null);
 
         try {
-            const response = await fetch('/fms-api/api/generate-certificate-manual', {
+            const response = await fetch('/fms-api/api/generate-certificate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    customer_id: user?.customer_id,
-                    plant_name: manualForm.plant_name,
-                    application_id: manualForm.application_id,
-                    device_name: manualForm.device_name,
-                    device_id_string: manualForm.device_id_string,
-                    endpoint_id: manualForm.endpoint_id,
-                    app_version: manualForm.app_version
+                    qrData,
+                    plant_name: selectedPlantName, // Send the explicitly selected plant
+                    application_id: selectedAppId, // Send optionally selected application
+                    userContext: {
+                        customer_id: user?.customer_id,
+                        customer_name: user?.customer_name
+                    }
                 })
             });
 
             const data = await response.json();
 
             if (!response.ok) {
-                console.error("Backend Error Response:", data);
                 throw new Error(data.error || `Server responded with ${response.status}`);
             }
 
@@ -127,8 +192,6 @@ const DashboardPage: React.FC = () => {
             setDownloadUrl(url);
             setLastGenerated(data.filename);
             setDeviceDetails(data.details);
-            setIsManualGenOpen(false);
-
         } catch (err: any) {
             console.error(err);
             setError(err.message);
@@ -136,6 +199,44 @@ const DashboardPage: React.FC = () => {
             setIsGenerating(false);
         }
     };
+
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setIsGenerating(true);
+        setError(null);
+        setLastGenerated(null);
+        setDownloadUrl(null);
+
+        const html5QrCode = new Html5Qrcode("reader-hidden");
+
+        try {
+            const decodedText = await html5QrCode.scanFile(file, true);
+            await handleGenerateCertificate(decodedText);
+        } catch (err: any) {
+            console.error("File Scan Error:", err);
+            setError("Could not find a valid QR code in this image. Please try another photo.");
+            setIsGenerating(false);
+        }
+    };
+
+    const handlePlantSelect = (plantName: string, appId: string | null) => {
+        setSelectedPlantName(plantName);
+        setSelectedAppId(appId);
+        setShowPlantSelector(false);
+        if (pendingOperation === 'scan') {
+            setIsScanning(true);
+        } else if (pendingOperation === 'upload') {
+            document.getElementById('qr-upload-input')?.click();
+        }
+    };
+
+    const hasReachedDeviceLimit = Boolean(
+        limits &&
+        typeof limits.device_limit === 'number' &&
+        devices.length >= limits.device_limit
+    );
 
     return (
         <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
@@ -238,19 +339,62 @@ const DashboardPage: React.FC = () => {
                     </div>
                 )}
 
-                <div className="grid grid-cols-1 gap-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Scan QR Card */}
                     <button
-                        onClick={() => setIsManualGenOpen(true)}
+                        onClick={() => {
+                            if (hasReachedDeviceLimit) {
+                                setError('Device limit reached');
+                                return;
+                            }
+                            setPendingOperation('scan');
+                            setShowPlantSelector(true);
+                        }}
                         className="group relative flex flex-col items-center justify-center p-10 bg-white border-2 border-slate-100 rounded-3xl shadow-xl shadow-slate-200/50 hover:border-blue-500 transition-all hover:scale-[1.02] cursor-pointer overflow-hidden"
                     >
+                        {isGenerating && (
+                            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-20 flex flex-col items-center justify-center space-y-4">
+                                <Loader2 size={40} className="text-blue-600 animate-spin" />
+                                <p className="text-slate-900 font-bold text-sm">Processing...</p>
+                            </div>
+                        )}
+
                         <div className="w-20 h-20 bg-blue-50 rounded-2xl flex items-center justify-center mb-6 text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                            <FileKey size={40} />
+                            <QrCode size={40} />
                         </div>
-                        <h2 className="text-2xl font-bold text-slate-900 mb-2">Generate Device Certificate</h2>
-                        <p className="text-center text-slate-500 max-w-[400px]">
-                            Manually select a plant and application, and provide device details to generate and download a secure certificate package.
+                        <h2 className="text-2xl font-bold text-slate-900 mb-2">Scan QR</h2>
+                        <p className="text-center text-slate-500 max-w-[240px] text-sm">
+                            Select a plant and scan a device QR code instantly.
                         </p>
                     </button>
+
+                    {/* Upload QR Card */}
+                    <div
+                        onClick={() => {
+                            if (hasReachedDeviceLimit) {
+                                setError('Device limit reached');
+                                return;
+                            }
+                            setPendingOperation('upload');
+                            setShowPlantSelector(true);
+                        }}
+                        className="group relative flex flex-col items-center justify-center p-10 bg-white border-2 border-slate-100 rounded-3xl shadow-xl shadow-slate-200/50 hover:border-purple-500 transition-all hover:scale-[1.02] cursor-pointer text-center"
+                    >
+                        <div className="w-20 h-20 bg-purple-50 rounded-2xl flex items-center justify-center mb-6 text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors">
+                            <Upload size={40} />
+                        </div>
+                        <h2 className="text-2xl font-bold text-slate-900 mb-2">Upload QR</h2>
+                        <p className="text-center text-slate-500 max-w-[240px] text-sm">
+                            Select a plant and upload a device QR code image.
+                        </p>
+                        <input
+                            id="qr-upload-input"
+                            type="file"
+                            className="hidden"
+                            accept="image/*"
+                            onChange={handleImageUpload}
+                        />
+                    </div>
                 </div>
 
                 {/* Your Assets Section */}
@@ -296,7 +440,7 @@ const DashboardPage: React.FC = () => {
 
                         const knownPlantNames = new Set(plantCerts.map((pc: any) => pc.plant_name));
                         const ungroupedApps = applications.filter(app => !app.plant_name || !knownPlantNames.has(app.plant_name));
-                        
+
                         if (ungroupedApps.length > 0) {
                             plantsToRender.push({
                                 name: 'Ungrouped / Heritage',
@@ -359,16 +503,16 @@ const DashboardPage: React.FC = () => {
                                                         {plant.apps.map(app => {
                                                             const appDevs = devices.filter(d => d.application_id === app._id);
                                                             const isExpanded = expandedApp === app._id;
-                                                            
+
                                                             return (
-                                                                <div 
-                                                                    key={app._id} 
+                                                                <div
+                                                                    key={app._id}
                                                                     className={cn(
                                                                         "border border-slate-100 rounded-2xl transition-all overflow-hidden",
                                                                         isExpanded ? "ring-2 ring-indigo-500/10 border-indigo-200" : "hover:border-slate-200"
                                                                     )}
                                                                 >
-                                                                    <div 
+                                                                    <div
                                                                         onClick={() => setExpandedApp(isExpanded ? null : app._id)}
                                                                         className="p-4 flex items-center justify-between cursor-pointer group/app"
                                                                     >
@@ -398,7 +542,7 @@ const DashboardPage: React.FC = () => {
                                                                                 <div className="flex items-center justify-between mb-3">
                                                                                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Enrolled Devices</span>
                                                                                 </div>
-                                                                                
+
                                                                                 {appDevs.length === 0 ? (
                                                                                     <div className="text-sm text-slate-400 italic py-4 text-center">
                                                                                         No devices enrolled in this application.
@@ -442,96 +586,136 @@ const DashboardPage: React.FC = () => {
                     })()}
                 </div>
 
-                {/* Manual Generation Modal */}
-                {isManualGenOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in overflow-y-auto">
-                        <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-xl overflow-hidden relative my-8">
+
+                {/* QR Scanner Modal */}
+                {isScanning && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+                        <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-lg overflow-hidden relative">
                             <button
-                                onClick={() => setIsManualGenOpen(false)}
+                                onClick={() => setIsScanning(false)}
                                 className="absolute top-6 right-6 z-10 p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full transition-colors"
                             >
                                 <X size={20} />
                             </button>
 
-                            <div className="p-8 pb-4">
-                                <h3 className="text-2xl font-bold text-slate-900 mb-2">Generate Certificate</h3>
-                                <p className="text-slate-500 text-sm">Provide device details to generate a secure certificate package.</p>
+                            <div className="p-8 pb-4 text-center">
+                                <h3 className="text-2xl font-bold text-slate-900 mb-2">Scan Device QR</h3>
+                                <p className="text-slate-500 text-sm">Position the QR code within the frame to authenticate.</p>
                             </div>
 
                             <div className="p-8 pt-0">
-                                <form onSubmit={handleManualGenerate} className="space-y-4">
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="text-sm font-semibold text-slate-700 block mb-1">Select Plant</label>
-                                            <select 
-                                                required
-                                                value={manualForm.plant_name}
-                                                onChange={e => setManualForm({...manualForm, plant_name: e.target.value, application_id: ''})}
-                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50"
-                                            >
-                                                <option value="">-- Choose Plant --</option>
-                                                {plantCerts.map((pc: any) => (
-                                                    <option key={pc.plant_name} value={pc.plant_name}>{pc.plant_name}</option>
-                                                ))}
-                                            </select>
+                                <div className="overflow-hidden rounded-3xl border-4 border-slate-50 relative min-h-[300px] bg-slate-50 flex flex-col items-center justify-center">
+                                    {cameraError ? (
+                                        <div className="p-8 text-center animate-in fade-in zoom-in-95">
+                                            <div className="w-16 h-16 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                                <X size={32} />
+                                            </div>
+                                            <p className="text-slate-900 font-bold mb-2">Camera Error</p>
+                                            <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+                                                {cameraError}
+                                            </p>
+                                            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                                                <button
+                                                    onClick={() => {
+                                                        setIsScanning(false);
+                                                        setTimeout(() => setIsScanning(true), 100);
+                                                    }}
+                                                    className="px-6 py-2 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors"
+                                                >
+                                                    Retry Camera
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        setIsScanning(false);
+                                                        document.getElementById('qr-upload-input')?.click();
+                                                    }}
+                                                    className="px-6 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl text-sm font-bold hover:bg-slate-50 transition-colors"
+                                                >
+                                                    Switch to Upload
+                                                </button>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <label className="text-sm font-semibold text-slate-700 block mb-1">Select Application</label>
-                                            <select 
-                                                required
-                                                value={manualForm.application_id}
-                                                onChange={e => setManualForm({...manualForm, application_id: e.target.value})}
-                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50"
-                                                disabled={!manualForm.plant_name}
-                                            >
-                                                <option value="">-- Choose App --</option>
-                                                {applications.filter(a => a.plant_name === manualForm.plant_name).map(a => (
-                                                    <option key={a._id} value={a._id}>{a.name}</option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                    </div>
-                                    
-                                    <div>
-                                        <label className="text-sm font-semibold text-slate-700 block mb-1">Device Name</label>
-                                        <input required type="text" value={manualForm.device_name} onChange={e => setManualForm({...manualForm, device_name: e.target.value})} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50" />
-                                    </div>
-                                    <div>
-                                        <label className="text-sm font-semibold text-slate-700 block mb-1">Device ID</label>
-                                        <input required type="text" value={manualForm.device_id_string} onChange={e => setManualForm({...manualForm, device_id_string: e.target.value})} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50" />
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="text-sm font-semibold text-slate-700 block mb-1">Endpoint Token</label>
-                                            <input required type="text" value={manualForm.endpoint_id} onChange={e => setManualForm({...manualForm, endpoint_id: e.target.value})} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50" />
-                                        </div>
-                                        <div>
-                                            <label className="text-sm font-semibold text-slate-700 block mb-1">App Version</label>
-                                            <input required type="text" value={manualForm.app_version} onChange={e => setManualForm({...manualForm, app_version: e.target.value})} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-slate-50" />
-                                        </div>
-                                    </div>
-
-                                    {error && <div className="text-red-500 text-sm mt-2 font-bold bg-red-50 p-3 rounded-lg border border-red-100">{error}</div>}
-
-                                    <div className="mt-6">
-                                        <button disabled={isGenerating} type="submit" className="w-full py-4 text-white bg-blue-600 rounded-xl font-bold hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center space-x-2">
-                                            {isGenerating ? (
-                                                <>
-                                                    <Loader2 className="animate-spin" />
-                                                    <span>Generating...</span>
-                                                </>
-                                            ) : (
-                                                <span>Generate & Download Package</span>
-                                            )}
-                                        </button>
-                                    </div>
-                                </form>
+                                    ) : (
+                                        <div id="qr-reader" className="w-full h-full"></div>
+                                    )}
+                                </div>
                             </div>
+
+                            {!cameraError && (
+                                <div className="bg-slate-50 p-6 flex items-center justify-center space-x-3 text-slate-400">
+                                    <Loader2 size={16} className="animate-spin" />
+                                    <span className="text-xs font-bold uppercase tracking-widest">Awaiting detection...</span>
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
 
+                {/* Hidden reader for file scanning */}
+                <div id="reader-hidden" style={{ display: 'none' }}></div>
+
                 {/* Modal logic ends here */}
+                {/* Plant Selector Modal */}
+                {showPlantSelector && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+                        <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md overflow-hidden relative">
+                            <button
+                                onClick={() => setShowPlantSelector(false)}
+                                className="absolute top-6 right-6 z-10 p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full transition-colors"
+                            >
+                                <X size={20} />
+                            </button>
+
+                            <div className="p-8 pb-4 text-center">
+                                <h3 className="text-2xl font-bold text-slate-900 mb-2">Select Plant</h3>
+                                <p className="text-slate-500 text-sm">Choose the plant destination for this device.</p>
+                            </div>
+
+                            <div className="p-8 pt-0 space-y-3">
+                                {plantCerts.length === 0 ? (
+                                    <div className="p-6 text-center text-slate-400 italic bg-slate-50 rounded-2xl border border-slate-100">
+                                        No active plants found. Please contact administrator.
+                                    </div>
+                                ) : (
+                                    plantCerts.map((pc: any) => (
+                                        <div key={pc.plant_name} className="flex flex-col gap-0 bg-white border border-slate-200 rounded-2xl hover:border-blue-300 transition-all overflow-hidden">
+                                            <div className="p-4 flex items-center justify-between font-bold text-slate-700 bg-slate-50/50">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-10 h-10 bg-white shadow-sm border border-slate-100 rounded-xl flex items-center justify-center text-blue-500">
+                                                        <Shield size={20} />
+                                                    </div>
+                                                    <span>{pc.plant_name}</span>
+                                                </div>
+                                            </div>
+                                            <div className="p-4 pt-2 flex flex-col gap-3">
+                                                <div className="flex flex-col gap-1.5">
+                                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Assign to Application (Optional)</label>
+                                                    <select
+                                                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                                        value={selectedAppForPlant[pc.plant_name] || ''}
+                                                        onChange={(e) => setSelectedAppForPlant(prev => ({ ...prev, [pc.plant_name]: e.target.value }))}
+                                                    >
+                                                        <option value="">-- No Application (Orphan Device) --</option>
+                                                        {applications.filter(a => a.plant_name === pc.plant_name).map(app => (
+                                                            <option key={app._id} value={app._id}>{app.name}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <button
+                                                    onClick={() => handlePlantSelect(pc.plant_name, selectedAppForPlant[pc.plant_name] || null)}
+                                                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-sm transition-colors flex items-center justify-center gap-2"
+                                                >
+                                                    Proceed
+                                                    <ChevronRight size={16} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
             </main>
 
             {/* Footer */}

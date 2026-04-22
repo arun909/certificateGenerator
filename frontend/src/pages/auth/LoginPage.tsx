@@ -6,15 +6,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import celerCover from "@/assets/celer_cover.jpeg";
 import conqueLogo from "@/assets/conque.png";
 import trizLogo from "@/assets/trizlogo.png";
-import {
-    AlertDialog,
-    AlertDialogAction,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 
 interface LoginViewProps {
     logoSrc?: string;
@@ -36,7 +27,7 @@ const LoginPage: React.FC<LoginViewProps> = ({
     const [isMounted, setIsMounted] = useState(false);
     const [isCheckingAuth, setIsCheckingAuth] = useState(true);
     const navigate = useNavigate();
-    const { user, isAuthenticated, isLoading, login, licenseWarning } = useAuth();
+    const { user, isAuthenticated, isLoading, login } = useAuth();
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
@@ -45,7 +36,6 @@ const LoginPage: React.FC<LoginViewProps> = ({
         {}
     );
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [showLicenseWarning, setShowLicenseWarning] = useState(false);
 
     useEffect(() => {
         setIsMounted(true);
@@ -55,25 +45,15 @@ const LoginPage: React.FC<LoginViewProps> = ({
     }, [loginSource]);
 
     useEffect(() => {
-        if (licenseWarning && isAuthenticated) {
-            setShowLicenseWarning(true);
-        }
-    }, [licenseWarning, isAuthenticated]);
-
-    useEffect(() => {
         if (!isMounted) return;
 
         if (!isLoading) {
             if (isAuthenticated && user) {
-                if (licenseWarning) {
-                    setShowLicenseWarning(true);
-                } else {
-                    redirectToDashboard();
-                }
+                redirectToDashboard();
             }
             setIsCheckingAuth(false);
         }
-    }, [isLoading, isAuthenticated, user, isMounted, licenseWarning]);
+    }, [isLoading, isAuthenticated, user, isMounted]);
 
     const redirectToDashboard = () => {
         if (user?.role === "SUPER_ADMIN") {
@@ -103,10 +83,8 @@ const LoginPage: React.FC<LoginViewProps> = ({
         if (isSubmitting) return;
 
         if (isAuthenticated && user) {
-            if (!licenseWarning) {
-                redirectToDashboard();
-                return;
-            }
+            redirectToDashboard();
+            return;
         }
 
         setErrors({});
@@ -350,37 +328,6 @@ const LoginPage: React.FC<LoginViewProps> = ({
                 </div>
             </div>
 
-            {/* License Warning Dialog */}
-            <AlertDialog
-                open={showLicenseWarning}
-                onOpenChange={setShowLicenseWarning}
-            >
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle className="text-red-600">
-                            License Expiring Soon
-                        </AlertDialogTitle>
-                        <AlertDialogDescription>
-                            {licenseWarning?.message || "Your license is expiring soon."}
-                            <br />
-                            <br />
-                            <span className="font-semibold">
-                                Expiry Date: {licenseWarning?.expiry_date}
-                            </span>
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogAction
-                            onClick={() => {
-                                setShowLicenseWarning(false);
-                                redirectToDashboard();
-                            }}
-                        >
-                            Continue
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
         </div>
     );
 };
