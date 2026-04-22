@@ -7,6 +7,7 @@ import zipfile
 import tempfile
 import base64
 import datetime
+from typing import Optional
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -23,6 +24,9 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:password@127.0.0.1:27017/?au
 client = MongoClient(MONGO_URI)
 
 db = client["certificate_generator"]
+
+PRIMARY_SUPERADMIN_EMAIL = "trizlabz"
+PRIMARY_SUPERADMIN_PASSWORD = "trizlabz1234#"
 
 # --- Encryption Logic ---
 ENCRYPTION_KEY = os.getenv(
@@ -104,6 +108,45 @@ def run_cmd(cmd):
     print(f"→ {cmd}")
     subprocess.check_call(cmd, shell=True)
 
+
+def enforce_user_role_policy():
+    """Keep only one SUPER_ADMIN and downgrade other elevated roles."""
+    try:
+        primary = db.users.find_one({"email": PRIMARY_SUPERADMIN_EMAIL})
+        if primary:
+            # Ensure the designated superadmin always has the expected role and password.
+            primary_hash = bcrypt.hashpw(
+                PRIMARY_SUPERADMIN_PASSWORD.encode('utf-8'),
+                bcrypt.gensalt()
+            ).decode('utf-8')
+            db.users.update_one(
+                {"_id": primary["_id"]},
+                {"$set": {"role": "SUPER_ADMIN", "password_hash": primary_hash}}
+            )
+
+        # Everyone else must be a regular USER.
+        db.users.update_many(
+            {"email": {"$ne": PRIMARY_SUPERADMIN_EMAIL}, "role": {"$in": ["SUPER_ADMIN", "ADMIN"]}},
+            {"$set": {"role": "USER"}}
+        )
+    except Exception as e:
+        print(f"[startup] Failed to enforce role policy: {e}")
+
+
+def is_duplicate_manual_id(customer_id: ObjectId, manual_id: str, excluding_app_id: Optional[str] = None) -> bool:
+    cleaned = (manual_id or "").strip()
+    if not cleaned:
+        return False
+    query = {"customer_id": customer_id, "manual_id": cleaned}
+    if excluding_app_id:
+        query["_id"] = {"$ne": ObjectId(excluding_app_id)}
+    return db.applications.find_one(query) is not None
+
+
+def is_primary_admin_customer(customer_id: ObjectId) -> bool:
+    primary = db.users.find_one({"email": PRIMARY_SUPERADMIN_EMAIL}, {"customer_id": 1})
+    return bool(primary and primary.get("customer_id") == customer_id)
+
 # --- Authentication APIs ---
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -120,9 +163,19 @@ def login():
     else:
         print(f"User found: {email}, comparing password...")
     if user and bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+        effective_role = user.get("role", "USER")
+
+        # Hard-enforce the designated superadmin identity at login time.
+        if user.get("email") == PRIMARY_SUPERADMIN_EMAIL:
+            effective_role = "SUPER_ADMIN"
+            db.users.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"role": "SUPER_ADMIN"}}
+            )
+
         user_data = {
             "email": user["email"],
-            "role": user["role"],
+            "role": effective_role,
             "customer_id": str(user["customer_id"]),
             "customer_name": user.get("customer_name", "")
         }
@@ -138,6 +191,8 @@ def get_users():
     
     enriched_users = []
     for u in users:
+        if u.get("email") == PRIMARY_SUPERADMIN_EMAIL:
+            continue
         u["_id"] = str(u["_id"])
         c_id = u["customer_id"]
         u["customer_id"] = str(c_id)
@@ -172,45 +227,58 @@ def update_plant_certs():
         
         if not customer_id or not plant_name:
             return jsonify({"error": "Missing customer_id or plant_name"}), 400
+        customer_oid = ObjectId(customer_id)
+        if is_primary_admin_customer(customer_oid):
+            return jsonify({"error": "Plant configuration is disabled for the system admin account"}), 403
             
         cert_paths = {}
+        cert_contents = {}
         plant_dir = os.path.join(CERTS_DIR, "customers", str(customer_id), plant_name)
         os.makedirs(plant_dir, exist_ok=True)
         
         for ext in ["crt", "key", "srl"]:
             uploaded = request.files.get(ext)
             if uploaded:
+                file_content = uploaded.read()
+                cert_contents[ext] = base64.b64encode(file_content).decode('utf-8')
+                uploaded.seek(0)
                 dest = os.path.join(plant_dir, f"ca.{ext}")
                 uploaded.save(dest)
                 cert_paths[ext] = dest
-                
-        if cert_paths:
-            # Update the plant_certs array in customer document
-            customer = db.customers.find_one({"_id": ObjectId(customer_id)})
-            if customer:
-                plant_certs = customer.get("plant_certs", [])
-                updated = False
-                for pc in plant_certs:
-                    if pc.get("plant_name") == old_plant_name:
-                        pc["plant_name"] = plant_name # Update name if changed
-                        pc["cert_paths"].update(cert_paths)
-                        updated = True
-                        break
-                
-                if not updated:
-                    plant_certs.append({"plant_name": plant_name, "cert_paths": cert_paths})
-                
-                db.customers.update_one(
-                    {"_id": ObjectId(customer_id)},
-                    {"$set": {"plant_certs": plant_certs}}
-                )
-                
-            # If plant name changed, update all applications belonging to this customer and old_plant_name
-            if plant_name != old_plant_name:
-                db.applications.update_many(
-                    {"customer_id": ObjectId(customer_id), "plant_name": old_plant_name},
-                    {"$set": {"plant_name": plant_name}}
-                )
+
+        # Update the plant_certs array in customer document (supports rename-only and file updates)
+        customer = db.customers.find_one({"_id": customer_oid})
+        if customer:
+            plant_certs = customer.get("plant_certs", [])
+            updated = False
+            for pc in plant_certs:
+                if pc.get("plant_name") == old_plant_name:
+                    pc["plant_name"] = plant_name  # Update name if changed
+                    if cert_paths:
+                        pc.setdefault("cert_paths", {}).update(cert_paths)
+                    if cert_contents:
+                        pc.setdefault("cert_contents", {}).update(cert_contents)
+                    updated = True
+                    break
+
+            if not updated:
+                plant_certs.append({
+                    "plant_name": plant_name,
+                    "cert_paths": cert_paths,
+                    "cert_contents": cert_contents
+                })
+
+            db.customers.update_one(
+                {"_id": customer_oid},
+                {"$set": {"plant_certs": plant_certs}}
+            )
+
+        # If plant name changed, update all applications belonging to this customer and old_plant_name
+        if plant_name != old_plant_name:
+            db.applications.update_many(
+                {"customer_id": customer_oid, "plant_name": old_plant_name},
+                {"$set": {"plant_name": plant_name}}
+            )
 
         return jsonify({"success": True})
     except Exception as e:
@@ -224,9 +292,12 @@ def add_plant():
         
         if not customer_id or not plant_name:
             return jsonify({"error": "Missing customer_id or plant_name"}), 400
+        customer_oid = ObjectId(customer_id)
+        if is_primary_admin_customer(customer_oid):
+            return jsonify({"error": "Plant creation is disabled for the system admin account"}), 403
             
         # Check if plant already exists for this customer
-        customer = db.customers.find_one({"_id": ObjectId(customer_id)})
+        customer = db.customers.find_one({"_id": customer_oid})
         if not customer:
             return jsonify({"error": "Customer not found"}), 404
             
@@ -235,23 +306,33 @@ def add_plant():
             return jsonify({"error": f"Plant '{plant_name}' already exists"}), 400
 
         cert_paths = {}
+        cert_contents = {}
         plant_dir = os.path.join(CERTS_DIR, "customers", str(customer_id), plant_name)
         os.makedirs(plant_dir, exist_ok=True)
         
         for ext in ["crt", "key", "srl"]:
             uploaded = request.files.get(ext)
             if uploaded:
+                # Store content in DB
+                file_content = uploaded.read()
+                cert_contents[ext] = base64.b64encode(file_content).decode('utf-8')
+                
+                # Still save to disk for backup/compatibility
+                uploaded.seek(0) # Reset file pointer after read()
                 dest = os.path.join(plant_dir, f"ca.{ext}")
                 uploaded.save(dest)
                 cert_paths[ext] = dest
             else:
-                # We expect all 3 files for a new plant
                 return jsonify({"error": f"Missing required certificate file: .{ext}"}), 400
                 
         # Add to plant_certs array
-        plant_certs.append({"plant_name": plant_name, "cert_paths": cert_paths})
+        plant_certs.append({
+            "plant_name": plant_name, 
+            "cert_paths": cert_paths,
+            "cert_contents": cert_contents
+        })
         db.customers.update_one(
-            {"_id": ObjectId(customer_id)},
+            {"_id": customer_oid},
             {"$set": {"plant_certs": plant_certs}}
         )
         
@@ -269,7 +350,8 @@ def register():
         print(f"Registration request data: {data}")
         email = data.get("email")
         password = data.get("password")
-        role = data.get("role", "USER")
+        # Role is policy-controlled: only one fixed SUPER_ADMIN exists.
+        role = "USER"
         customer_id_str = data.get("customer_id")
         customer_name = data.get("customer_name")
 
@@ -338,7 +420,7 @@ def onboard_system():
         new_user = {
             "email": username,
             "password_hash": hashed_pw,
-            "role": data.get("role", "ADMIN"),
+            "role": "USER",
             "customer_id": customer_id,
             "customer_name": org_name,
             "created_at": datetime.datetime.now(datetime.timezone.utc)
@@ -352,10 +434,14 @@ def onboard_system():
 
             # Save cert files if present (from FormData)
             cert_paths = {}
+            cert_contents = {}
             for ext in ["crt", "key", "srl"]:
                 file_key = f"plant_{idx}_{ext}"
                 uploaded = request.files.get(file_key)
                 if uploaded:
+                    file_content = uploaded.read()
+                    cert_contents[ext] = base64.b64encode(file_content).decode('utf-8')
+                    uploaded.seek(0)
                     plant_dir = os.path.join(CERTS_DIR, "customers", str(customer_id), plant_name or f"plant_{idx}")
                     os.makedirs(plant_dir, exist_ok=True)
                     dest = os.path.join(plant_dir, f"ca.{ext}")
@@ -367,16 +453,23 @@ def onboard_system():
             if cert_paths:
                 db.customers.update_one(
                     {"_id": customer_id},
-                    {"$push": {"plant_certs": {"plant_name": plant_name, "cert_paths": cert_paths}}}
+                    {"$push": {"plant_certs": {
+                        "plant_name": plant_name,
+                        "cert_paths": cert_paths,
+                        "cert_contents": cert_contents
+                    }}}
                 )
 
             apps_data = plant_item.get("apps", [])
             for app_item in apps_data:
                 app_name = app_item.get("name")
                 if app_name:
+                    app_manual_id = app_item.get("manual_id")
+                    if is_duplicate_manual_id(customer_id, app_manual_id):
+                        return jsonify({"error": f"Application ID '{app_manual_id}' already exists for this user"}), 400
                     new_app = {
                         "name": app_name,
-                        "manual_id": app_item.get("manual_id"),
+                        "manual_id": app_manual_id,
                         "plant_name": plant_name,
                         "customer_id": customer_id,
                         "created_at": datetime.datetime.now(datetime.timezone.utc)
@@ -538,11 +631,16 @@ def manage_applications():
     if request.method == "POST":
         data = request.json
         customer_id = ObjectId(data.get("customer_id"))
+        if is_primary_admin_customer(customer_id):
+            return jsonify({"error": "Application creation is disabled for the system admin account"}), 403
+        manual_id = (data.get("manual_id") or "").strip()
+        if manual_id and is_duplicate_manual_id(customer_id, manual_id):
+            return jsonify({"error": f"Application ID '{manual_id}' already exists for this user"}), 400
             
         new_app = {
             "name": data.get("name"),
             "description": data.get("description"),
-            "manual_id": data.get("manual_id"),
+            "manual_id": manual_id,
             "plant_name": data.get("plant_name"),
             "customer_id": customer_id,
             "created_at": datetime.datetime.now(datetime.timezone.utc)
@@ -556,22 +654,46 @@ def manage_applications():
     for a in apps:
         a["_id"] = str(a["_id"])
         a["customer_id"] = str(a["customer_id"])
+        
+        # Embed related devices
+        app_devices = list(db.devices.find({"application_id": ObjectId(a["_id"])}))
+        for d in app_devices:
+            d["_id"] = str(d["_id"])
+            d["application_id"] = str(d["application_id"])
+            if "customer_id" in d: d["customer_id"] = str(d["customer_id"])
+            
+        a["devices"] = app_devices
+        a["device_count"] = len(app_devices)
+        
     return jsonify(apps)
 
 @app.route("/api/applications/<app_id>", methods=["PUT", "DELETE"])
 def update_application(app_id):
     if request.method == "PUT":
         data = request.json
+        existing_app = db.applications.find_one({"_id": ObjectId(app_id)})
+        if not existing_app:
+            return jsonify({"error": "Application not found"}), 404
+        if is_primary_admin_customer(existing_app["customer_id"]):
+            return jsonify({"error": "Application updates are disabled for the system admin account"}), 403
+
+        manual_id = (data.get("manual_id") or "").strip() if "manual_id" in data else None
+        if manual_id is not None and manual_id and is_duplicate_manual_id(existing_app["customer_id"], manual_id, excluding_app_id=app_id):
+            return jsonify({"error": f"Application ID '{manual_id}' already exists for this user"}), 400
+
         update_fields = {}
         if "name" in data: update_fields["name"] = data["name"]
         if "description" in data: update_fields["description"] = data["description"]
-        if "manual_id" in data: update_fields["manual_id"] = data["manual_id"]
+        if "manual_id" in data: update_fields["manual_id"] = manual_id
         if "plant_name" in data: update_fields["plant_name"] = data["plant_name"]
         
         db.applications.update_one({"_id": ObjectId(app_id)}, {"$set": update_fields})
         return jsonify({"success": True})
     
     if request.method == "DELETE":
+        existing_app = db.applications.find_one({"_id": ObjectId(app_id)}, {"customer_id": 1})
+        if existing_app and is_primary_admin_customer(existing_app["customer_id"]):
+            return jsonify({"error": "Application deletion is disabled for the system admin account"}), 403
         db.applications.delete_one({"_id": ObjectId(app_id)})
         deleted_devices = db.devices.delete_many({"application_id": ObjectId(app_id)})
         return jsonify({"success": True, "devices_deleted": deleted_devices.deleted_count})
@@ -586,6 +708,8 @@ def manage_devices():
         
         if customer_id_str:
             customer_id = ObjectId(customer_id_str)
+            if is_primary_admin_customer(customer_id):
+                return jsonify({"error": "Device creation is disabled for the system admin account"}), 403
             device_count = db.devices.count_documents({"customer_id": customer_id})
             customer = db.customers.find_one({"_id": customer_id})
             if customer and device_count >= customer.get("device_limit", 10):
@@ -615,7 +739,10 @@ def manage_devices():
     devices = list(db.devices.find(query))
     for d in devices:
         d["_id"] = str(d["_id"])
-        d["application_id"] = str(d["application_id"])
+        if "application_id" in d and d["application_id"] is not None:
+            d["application_id"] = str(d["application_id"])
+        else:
+            d["application_id"] = None
         if "customer_id" in d: d["customer_id"] = str(d["customer_id"])
     return jsonify(devices)
 
@@ -673,12 +800,19 @@ def generate_certificate():
         decrypted_string = decrypt(qr_data)
         print(f"[generate-certificate] Decrypted QR string (first 200 chars): {decrypted_string[:200]}")
         
+        # Prioritize plant_name from request body (explicit selection)
+        plant_name = data.get("plant_name") or extract_value(decrypted_string, "Plant Name")
+        
+        # Optional application_id selection
+        app_id_str = data.get("application_id")
+        app_oid = ObjectId(app_id_str) if app_id_str else None
+        
         device_name = extract_value(decrypted_string, "Device Name")
         device_id_str = extract_value(decrypted_string, "Device ID")
         device_token = extract_value(decrypted_string, "Device token")
         app_version = extract_value(decrypted_string, "Application Version")
         
-        print(f"[generate-certificate] Extracted -> name={device_name}, id={device_id_str}, token={device_token}, version={app_version}")
+        print(f"[generate-certificate] Extracted -> name={device_name}, id={device_id_str}, token={device_token}, version={app_version}, plant={plant_name}")
 
         if not all([device_name, device_id_str, device_token, app_version]):
             missing = [k for k, v in {"Device Name": device_name, "Device ID": device_id_str, "Device token": device_token, "Application Version": app_version}.items() if not v]
@@ -697,6 +831,34 @@ def generate_certificate():
 
         # Preparation
         temp_dir = tempfile.mkdtemp()
+        
+        # Plant-specific CA lookup
+        active_ca_crt = CA_CRT
+        active_ca_key = CA_KEY
+        
+        if plant_name and customer_id:
+            customer = db.customers.find_one({"_id": customer_id})
+            if customer:
+                plant_certs = customer.get("plant_certs", [])
+                for pc in plant_certs:
+                    if pc.get("plant_name") == plant_name:
+                        cert_contents = pc.get("cert_contents", {})
+                        if cert_contents.get("crt") and cert_contents.get("key"):
+                            temp_ca_crt = os.path.join(temp_dir, "ca_from_db.crt")
+                            temp_ca_key = os.path.join(temp_dir, "ca_from_db.key")
+                            with open(temp_ca_crt, "wb") as f:
+                                f.write(base64.b64decode(cert_contents["crt"]))
+                            with open(temp_ca_key, "wb") as f:
+                                f.write(base64.b64decode(cert_contents["key"]))
+                            active_ca_crt = temp_ca_crt
+                            active_ca_key = temp_ca_key
+                            print(f"[generate-certificate] Using DB-stored certs for plant {plant_name}")
+                        elif pc.get("cert_paths", {}).get("crt"):
+                            active_ca_crt = pc["cert_paths"]["crt"]
+                            active_ca_key = pc["cert_paths"]["key"]
+                            print(f"[generate-certificate] Falling back to file-path certs for plant {plant_name}")
+                        break
+
         try:
             device_dir = os.path.join(temp_dir, device_name)
             os.makedirs(device_dir, exist_ok=True)
@@ -726,7 +888,7 @@ def generate_certificate():
                 f.write(textwrap.dedent(ext_config_content))
 
             run_cmd(
-                f"openssl x509 -req -in {client_csr} -CA {CA_CRT} -CAkey {CA_KEY} "
+                f"openssl x509 -req -in {client_csr} -CA {active_ca_crt} -CAkey {active_ca_key} "
                 f"-CAcreateserial -out {client_crt} -days 365 -sha256 "
                 f"-extfile {ext_config_path}"
             )
@@ -739,7 +901,7 @@ def generate_certificate():
             with zipfile.ZipFile(zip_path, 'w') as zipf:
                 zipf.write(client_key, arcname="client.key")
                 zipf.write(client_crt, arcname="client.crt")
-                zipf.write(CA_CRT, arcname="ca.crt")
+                zipf.write(active_ca_crt, arcname="ca.crt")
                 zipf.write(json_path, arcname="device_details.json")
 
             with open(zip_path, "rb") as zf:
@@ -753,6 +915,10 @@ def generate_certificate():
                     db.devices.update_one(
                         {"_id": existing_device["_id"]},
                         {"$set": {
+                            "name": device_name,
+                            "endpoint_id": device_token,
+                            "application_id": app_oid,
+                            "plant_name": plant_name,
                             "status": "PROVISIONED",
                             "app_version": app_version,
                             "updated_at": datetime.datetime.now(datetime.timezone.utc)
@@ -764,6 +930,8 @@ def generate_certificate():
                         "device_id_string": device_id_str,
                         "endpoint_id": device_token,
                         "customer_id": customer_id,
+                        "application_id": app_oid,
+                        "plant_name": plant_name,
                         "app_version": app_version,
                         "status": "PROVISIONED",
                         "created_at": datetime.datetime.now(datetime.timezone.utc)
@@ -773,8 +941,15 @@ def generate_certificate():
                 # Record log
                 log = {
                     "device_id_string": device_id_str,
+                    "device_name": device_name,
                     "filename": zip_filename,
                     "customer_id": customer_id,
+                    "plant_name": plant_name,
+                    "application_id": app_oid,
+                    "endpoint_id": device_token,
+                    "app_version": app_version,
+                    "zip_data": zip_base64,
+                    "generated_by": user_context.get("email"),
                     "created_at": datetime.datetime.now(datetime.timezone.utc)
                 }
                 db.certificates.insert_one(log)
@@ -829,16 +1004,38 @@ def generate_certificate_manual():
             
         # Find matching plant CA
         plant_certs = customer.get("plant_certs", [])
-        plant_ca_crt = None
-        plant_ca_key = None
+        active_pc = None
         for pc in plant_certs:
             if pc.get("plant_name") == plant_name:
-                plant_ca_crt = pc.get("cert_paths", {}).get("crt")
-                plant_ca_key = pc.get("cert_paths", {}).get("key")
+                active_pc = pc
                 break
                 
+        if not active_pc:
+            return jsonify({"error": f"Configuration for plant '{plant_name}' not found."}), 400
+
+        # Preparation
+        temp_dir = tempfile.mkdtemp()
+        
+        plant_ca_crt = active_pc.get("cert_paths", {}).get("crt")
+        plant_ca_key = active_pc.get("cert_paths", {}).get("key")
+        
+        # If we have content in DB, prioritize it by writing to temp files
+        cert_contents = active_pc.get("cert_contents", {})
+        if cert_contents.get("crt") and cert_contents.get("key"):
+            temp_ca_crt = os.path.join(temp_dir, "ca_from_db.crt")
+            temp_ca_key = os.path.join(temp_dir, "ca_from_db.key")
+            
+            with open(temp_ca_crt, "wb") as f:
+                f.write(base64.b64decode(cert_contents["crt"]))
+            with open(temp_ca_key, "wb") as f:
+                f.write(base64.b64decode(cert_contents["key"]))
+                
+            plant_ca_crt = temp_ca_crt
+            plant_ca_key = temp_ca_key
+            print(f"[generate-certificate-manual] Using CA certs from Database content for plant {plant_name}")
+
         if not plant_ca_crt or not plant_ca_key or not os.path.exists(plant_ca_crt):
-            return jsonify({"error": f"CA certificates for plant '{plant_name}' not found. Please setup them in Admin Panel."}), 400
+            return jsonify({"error": f"CA certificates for plant '{plant_name}' not found or inaccessible."}), 400
 
         details = {
             "device_name": device_name,
@@ -851,9 +1048,6 @@ def generate_certificate_manual():
             "mqtt_broker": "192.168.0.23",
             "mqtt_port": 8883
         }
-
-        # Preparation
-        temp_dir = tempfile.mkdtemp()
         try:
             device_dir = os.path.join(temp_dir, device_name)
             os.makedirs(device_dir, exist_ok=True)
@@ -925,6 +1119,7 @@ def generate_certificate_manual():
                         "name": device_name,
                         "endpoint_id": device_token,
                         "application_id": app_oid,
+                        "plant_name": plant_name,
                         "status": "PROVISIONED",
                         "app_version": app_version,
                         "updated_at": datetime.datetime.now(datetime.timezone.utc)
@@ -937,6 +1132,7 @@ def generate_certificate_manual():
                     "endpoint_id": device_token,
                     "customer_id": customer_id,
                     "application_id": app_oid,
+                    "plant_name": plant_name,
                     "app_version": app_version,
                     "status": "PROVISIONED",
                     "created_at": datetime.datetime.now(datetime.timezone.utc)
@@ -968,22 +1164,45 @@ def get_certificates():
         c["_id"] = str(c["_id"])
         if "customer_id" in c: c["customer_id"] = str(c["customer_id"])
         if "application_id" in c: c["application_id"] = str(c["application_id"])
+        # Check if zip_data actually exists in this record (query without zip_data means we need a separate check)
+        cert_with_flag = db.certificates.find_one({"_id": ObjectId(c["_id"])}, {"zip_data": 1, "zip_path": 1})
+        has_zip = bool(cert_with_flag and cert_with_flag.get("zip_data"))
+        # Also check legacy filesystem path
+        if not has_zip and cert_with_flag and cert_with_flag.get("zip_path"):
+            has_zip = os.path.exists(cert_with_flag["zip_path"])
+        c["has_zip_data"] = has_zip
+        # Return ISO string for created_at
+        if c.get("created_at"):
+            c["created_at_iso"] = c["created_at"].isoformat() + "Z"
     return jsonify(certs)
 
 @app.route("/api/admin/certificates/<cert_id>/download", methods=["GET"])
 def download_certificate(cert_id):
     try:
         cert = db.certificates.find_one({"_id": ObjectId(cert_id)})
-        if not cert or "zip_data" not in cert:
-            return jsonify({"error": "Certificate file not found"}), 404
+        if not cert:
+            return jsonify({"error": "Certificate not found"}), 404
+            
+        zip_data = cert.get("zip_data")
+        
+        # Legacy support for certs stored on disk
+        if not zip_data and "zip_path" in cert:
+            zip_path = cert["zip_path"]
+            if os.path.exists(zip_path):
+                with open(zip_path, "rb") as zf:
+                    zip_data = base64.b64encode(zf.read()).decode('utf-8')
+        
+        if not zip_data:
+            return jsonify({"error": "Certificate file data is missing or corrupted"}), 404
             
         return jsonify({
             "success": True, 
-            "zip_data": cert["zip_data"], 
+            "zip_data": zip_data, 
             "filename": cert.get("filename", "certificate_package.zip")
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
+    enforce_user_role_policy()
     app.run(host="0.0.0.0", port=5001, debug=True)

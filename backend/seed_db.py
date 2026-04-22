@@ -54,28 +54,13 @@ def seed_database():
         test_user = {
             "email": "testuser",
             "password_hash": test_hashed_pw,
-            "role": "ADMIN",
+            "role": "USER",
             "customer_id": customer_id,
             "customer_name": "TrizLabz Admin Org",
             "created_at": datetime.datetime.now(datetime.timezone.utc)
         }
         db.users.insert_one(test_user)
         print(f"Created test user: testuser (password: {test_user_password})")
-
-        # 5. Create admin user
-        admin_username = "admin"
-        admin_password = "admin"
-        admin_hashed_pw = bcrypt.hashpw(admin_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        admin_user = {
-            "email": admin_username,
-            "password_hash": admin_hashed_pw,
-            "role": "SUPER_ADMIN",
-            "customer_id": customer_id,
-            "customer_name": "TrizLabz Admin Org",
-            "created_at": datetime.datetime.now(datetime.timezone.utc)
-        }
-        db.users.insert_one(admin_user)
-        print(f"Created super admin user: {admin_username} (password: {admin_password})")
 
         print("\nDatabase 'certificate_generator' seeded successfully.")
 
