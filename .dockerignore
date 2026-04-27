@@ -1,0 +1,8 @@
+node_modules
+.git
+.gitignore
+*.log
+frontend/node_modules
+frontend/dist
+backend/venv
+backend/__pycache__

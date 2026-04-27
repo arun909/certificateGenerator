@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    # Use host network mode so 'localhost' refers to the host machine
+    network_mode: host
+    environment:
+      - MONGO_URI=mongodb://localhost:27017/certificate_generator
+      - PORT=5000
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/certs:/app/certs
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    # Use host network mode to easily reach the backend on localhost:5000
+    network_mode: host
+    env_file:
+      - ./frontend/.env
+    restart: always
