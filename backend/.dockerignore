@@ -1,0 +1,12 @@
+__pycache__
+venv
+.git
+.gitignore
+.env
+Dockerfile
+requirements.txt
+certs/customers/*
+*.pyc
+*.pyo
+*.pyd
+.db
