@@ -45,6 +45,8 @@ const AdminDashboard: React.FC = () => {
         plants: [
             {
                 name: '',
+                mqtt_broker: '192.168.0.23',
+                mqtt_port: '8883',
                 certFiles: { crt: null as File | null, key: null as File | null, srl: null as File | null },
                 apps: [
                     {
@@ -104,10 +106,14 @@ const AdminDashboard: React.FC = () => {
         customerId: string;
         certPaths?: any;
         apps: any[];
+        mqtt_broker: string;
+        mqtt_port: string;
     } | null>(null);
     const [addingPlantToUser, setAddingPlantToUser] = useState<{ userId: string; customerId: string } | null>(null);
     const [newPlantForm, setNewPlantForm] = useState({
         name: '',
+        mqtt_broker: '192.168.0.23',
+        mqtt_port: '8883',
         certFiles: { crt: null as File | null, key: null as File | null, srl: null as File | null }
     });
     const [userStats, setUserStats] = useState<Record<string, any>>({}); // customerId -> stats
@@ -167,6 +173,8 @@ const AdminDashboard: React.FC = () => {
             // Structured JSON data (without File objects)
             const plantsData = userForm.plants.map(p => ({
                 name: p.name,
+                mqtt_broker: p.mqtt_broker,
+                mqtt_port: p.mqtt_port,
                 apps: p.apps
             }));
             formData.append('data', JSON.stringify({
@@ -202,7 +210,13 @@ const AdminDashboard: React.FC = () => {
                 password: '',
                 deviceLimit: 10,
                 role: 'ADMIN',
-                plants: [{ name: '', certFiles: { crt: null, key: null, srl: null }, apps: [{ name: '', manual_id: '', devices: [{ name: '', device_id: '', version: '' }] }] }]
+                plants: [{
+                    name: '',
+                    mqtt_broker: '192.168.0.23',
+                    mqtt_port: '8883',
+                    certFiles: { crt: null, key: null, srl: null },
+                    apps: [{ name: '', manual_id: '', devices: [{ name: '', device_id: '', version: '' }] }]
+                }]
             });
         } catch (err: any) {
             alert(`Process Failed: ${err.message}`);
@@ -438,26 +452,30 @@ const AdminDashboard: React.FC = () => {
         if (!editingPlant) return;
         setIsSubmitting(true);
         try {
-            // 1. Handle Cert Re-uploads & Plant Name Change
+            // 1. Handle Cert Re-uploads, Plant Name Change & MQTT Updates
             const selectedFiles = (editingPlant as any).newFiles || {};
-            if (Object.keys(selectedFiles).length > 0 || editingPlant.plantName !== (editingPlant as any).originalName) {
-                const formData = new FormData();
-                formData.append('customer_id', editingPlant.customerId);
-                formData.append('plant_name', editingPlant.plantName);
-                if ((editingPlant as any).originalName) {
-                    formData.append('old_plant_name', (editingPlant as any).originalName);
-                }
+            const isNameChanged = editingPlant.plantName !== (editingPlant as any).originalName;
 
-                if (selectedFiles.crt) formData.append('crt', selectedFiles.crt);
-                if (selectedFiles.key) formData.append('key', selectedFiles.key);
-                if (selectedFiles.srl) formData.append('srl', selectedFiles.srl);
+            // To be safe, we'll consider MQTT fields always potentially updated if we're in the edit modal
+            const formData = new FormData();
+            formData.append('customer_id', editingPlant.customerId);
+            formData.append('plant_name', editingPlant.plantName);
+            formData.append('mqtt_broker', editingPlant.mqtt_broker);
+            formData.append('mqtt_port', editingPlant.mqtt_port);
 
-                await fetch(`${BASE_URL}/api/admin/update-plant-certs`, {
-                    method: 'POST',
-                    body: formData,
-                    credentials: 'include'
-                });
+            if (isNameChanged && (editingPlant as any).originalName) {
+                formData.append('old_plant_name', (editingPlant as any).originalName);
             }
+
+            if (selectedFiles.crt) formData.append('crt', selectedFiles.crt);
+            if (selectedFiles.key) formData.append('key', selectedFiles.key);
+            if (selectedFiles.srl) formData.append('srl', selectedFiles.srl);
+
+            await fetch(`${BASE_URL}/api/admin/update-plant-certs`, {
+                method: 'POST',
+                body: formData,
+                credentials: 'include'
+            });
 
             // 2. Handle Application Updates (Names/Manual IDs within this plant)
             // Note: In this simple version we assume the user might have edited names in the modal apps list
@@ -553,6 +571,8 @@ const AdminDashboard: React.FC = () => {
             const formData = new FormData();
             formData.append('customer_id', addingPlantToUser.customerId);
             formData.append('plant_name', newPlantForm.name);
+            formData.append('mqtt_broker', newPlantForm.mqtt_broker);
+            formData.append('mqtt_port', newPlantForm.mqtt_port);
             formData.append('crt', crt);
             formData.append('key', key);
             formData.append('srl', srl);
@@ -568,7 +588,12 @@ const AdminDashboard: React.FC = () => {
 
             alert("Plant added successfully!");
             setAddingPlantToUser(null);
-            setNewPlantForm({ name: '', certFiles: { crt: null, key: null, srl: null } });
+            setNewPlantForm({
+                name: '',
+                mqtt_broker: '192.168.0.23',
+                mqtt_port: '8883',
+                certFiles: { crt: null, key: null, srl: null }
+            });
 
             // Refresh hierarchy
             if (expandedUser) {
@@ -890,19 +915,49 @@ const AdminDashboard: React.FC = () => {
                                                         )}
 
                                                         {/* Plant Name */}
-                                                        <div className="space-y-2">
-                                                            <label className="text-sm font-bold text-slate-700">Plant Name *</label>
-                                                            <input
-                                                                type="text"
-                                                                placeholder="e.g. Main Processing Plant"
-                                                                value={plant.name}
-                                                                onChange={e => {
-                                                                    const newPlants = [...userForm.plants];
-                                                                    newPlants[plantIdx].name = e.target.value;
-                                                                    setUserForm(prev => ({ ...prev, plants: newPlants }));
-                                                                }}
-                                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white"
-                                                            />
+                                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                                            <div className="space-y-2 md:col-span-1">
+                                                                <label className="text-sm font-bold text-slate-700">Plant Name *</label>
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="e.g. Main Processing Plant"
+                                                                    value={plant.name}
+                                                                    onChange={e => {
+                                                                        const newPlants = [...userForm.plants];
+                                                                        newPlants[plantIdx].name = e.target.value;
+                                                                        setUserForm(prev => ({ ...prev, plants: newPlants }));
+                                                                    }}
+                                                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-2">
+                                                                <label className="text-sm font-bold text-slate-700">MQTT Broker</label>
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="127.0.0.1"
+                                                                    value={plant.mqtt_broker}
+                                                                    onChange={e => {
+                                                                        const newPlants = [...userForm.plants];
+                                                                        newPlants[plantIdx].mqtt_broker = e.target.value;
+                                                                        setUserForm(prev => ({ ...prev, plants: newPlants }));
+                                                                    }}
+                                                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-2">
+                                                                <label className="text-sm font-bold text-slate-700">MQTT Port</label>
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="8883"
+                                                                    value={plant.mqtt_port}
+                                                                    onChange={e => {
+                                                                        const newPlants = [...userForm.plants];
+                                                                        newPlants[plantIdx].mqtt_port = e.target.value;
+                                                                        setUserForm(prev => ({ ...prev, plants: newPlants }));
+                                                                    }}
+                                                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+                                                                />
+                                                            </div>
                                                         </div>
 
                                                         {/* Certificate Files */}
@@ -1080,7 +1135,13 @@ const AdminDashboard: React.FC = () => {
                                                     type="button"
                                                     onClick={() => setUserForm(prev => ({
                                                         ...prev,
-                                                        plants: [...prev.plants, { name: '', certFiles: { crt: null, key: null, srl: null }, apps: [{ name: '', manual_id: '', devices: [{ name: '', device_id: '', version: '' }] }] }]
+                                                        plants: [...prev.plants, {
+                                                            name: '',
+                                                            mqtt_broker: '192.168.0.23',
+                                                            mqtt_port: '8883',
+                                                            certFiles: { crt: null, key: null, srl: null },
+                                                            apps: [{ name: '', manual_id: '', devices: [{ name: '', device_id: '', version: '' }] }]
+                                                        }]
                                                     }))}
                                                     className="w-full py-4 rounded-2xl border-2 border-dashed border-blue-100 text-blue-400 font-bold text-sm hover:border-blue-400 hover:bg-blue-50/50 transition-all flex items-center justify-center gap-2 group"
                                                 >
@@ -1273,7 +1334,9 @@ const AdminDashboard: React.FC = () => {
                                                                     return {
                                                                         name: pName,
                                                                         apps: appsByPlant[pName] || [],
-                                                                        certs: pc?.cert_paths || null
+                                                                        certs: pc?.cert_paths || null,
+                                                                        mqtt_broker: pc?.mqtt_broker || '192.168.0.23',
+                                                                        mqtt_port: String(pc?.mqtt_port || '8883')
                                                                     };
                                                                 });
 
@@ -1284,7 +1347,9 @@ const AdminDashboard: React.FC = () => {
                                                                     plantsToRender.push({
                                                                         name: 'Ungrouped / Heritage',
                                                                         apps: ungroupedApps,
-                                                                        certs: null
+                                                                        certs: null,
+                                                                        mqtt_broker: '192.168.0.23',
+                                                                        mqtt_port: '8883'
                                                                     });
                                                                 }
 
@@ -1328,7 +1393,9 @@ const AdminDashboard: React.FC = () => {
                                                                                                             plantName: plant.name,
                                                                                                             customerId: user.customer_id,
                                                                                                             certPaths: plant.certs,
-                                                                                                            apps: plant.apps
+                                                                                                            apps: plant.apps,
+                                                                                                            mqtt_broker: (plant as any).mqtt_broker,
+                                                                                                            mqtt_port: (plant as any).mqtt_port
                                                                                                         });
                                                                                                     }}
                                                                                                     className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
@@ -1913,7 +1980,28 @@ const AdminDashboard: React.FC = () => {
                                             className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-semibold"
                                         />
                                     </div>
+
                                     <div className="space-y-3">
+                                        <label className="text-sm font-bold text-slate-700">MQTT Configuration (Broker & Port)</label>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <input
+                                                type="text"
+                                                value={editingPlant.mqtt_broker}
+                                                placeholder="Broker"
+                                                onChange={e => setEditingPlant({ ...editingPlant, mqtt_broker: e.target.value })}
+                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm"
+                                            />
+                                            <input
+                                                type="text"
+                                                value={editingPlant.mqtt_port}
+                                                placeholder="Port"
+                                                onChange={e => setEditingPlant({ ...editingPlant, mqtt_port: e.target.value })}
+                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3 md:col-span-2">
                                         <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
                                             <Server size={16} className="text-blue-500" />
                                             Infrastructure Status
@@ -2173,71 +2261,94 @@ const AdminDashboard: React.FC = () => {
                                         placeholder="e.g. Frankfurt Data Center"
                                         value={newPlantForm.name}
                                         onChange={e => setNewPlantForm({ ...newPlantForm, name: e.target.value })}
-                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-semibold"
+                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-semibold mb-4"
                                     />
                                 </div>
 
-                                <div className="space-y-4 pt-4 border-t border-slate-50">
-                                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Initial Certificates</h4>
-                                    <div className="grid grid-cols-1 gap-4">
-                                        {['crt', 'key', 'srl'].map((ext) => (
-                                            <div key={ext} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                                                <div className="flex flex-col">
-                                                    <span className="text-xs font-bold text-slate-600 uppercase">.{ext} File</span>
-                                                    <span className="text-[10px] text-slate-400">
-                                                        {(newPlantForm.certFiles as any)[ext]?.name || "Not selected"}
-                                                    </span>
-                                                </div>
-                                                <input
-                                                    type="file"
-                                                    id={`new-plant-${ext}`}
-                                                    className="hidden"
-                                                    accept={`.${ext}`}
-                                                    onChange={e => {
-                                                        const file = e.target.files?.[0];
-                                                        if (file) {
-                                                            setNewPlantForm({
-                                                                ...newPlantForm,
-                                                                certFiles: { ...newPlantForm.certFiles, [ext]: file }
-                                                            });
-                                                        }
-                                                    }}
-                                                />
-                                                <label
-                                                    htmlFor={`new-plant-${ext}`}
-                                                    className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-blue-600 hover:bg-blue-50 transition-all cursor-pointer"
-                                                >
-                                                    Choose File
-                                                </label>
-                                            </div>
-                                        ))}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700">MQTT Broker</label>
+                                        <input
+                                            type="text"
+                                            placeholder="127.0.0.1"
+                                            value={newPlantForm.mqtt_broker}
+                                            onChange={e => setNewPlantForm({ ...newPlantForm, mqtt_broker: e.target.value })}
+                                            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700">MQTT Port</label>
+                                        <input
+                                            type="text"
+                                            placeholder="8883"
+                                            value={newPlantForm.mqtt_port}
+                                            onChange={e => setNewPlantForm({ ...newPlantForm, mqtt_port: e.target.value })}
+                                            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm"
+                                        />
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="p-8 border-t border-slate-100 bg-slate-50 flex gap-4 rounded-b-3xl">
-                                <button
-                                    onClick={() => setAddingPlantToUser(null)}
-                                    className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={handleSaveNewPlant}
-                                    disabled={isSubmitting}
-                                    className={cn(
-                                        "flex-[2] px-6 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2",
-                                        isSubmitting && "opacity-70 cursor-not-allowed"
-                                    )}
-                                >
-                                    {isSubmitting ? <RefreshCw size={20} className="animate-spin" /> : "Create Plant"}
-                                </button>
+                            <div className="space-y-4 pt-4 border-t border-slate-50">
+                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Initial Certificates</h4>
+                                <div className="grid grid-cols-1 gap-4">
+                                    {['crt', 'key', 'srl'].map((ext) => (
+                                        <div key={ext} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                            <div className="flex flex-col">
+                                                <span className="text-xs font-bold text-slate-600 uppercase">.{ext} File</span>
+                                                <span className="text-[10px] text-slate-400">
+                                                    {(newPlantForm.certFiles as any)[ext]?.name || "Not selected"}
+                                                </span>
+                                            </div>
+                                            <input
+                                                type="file"
+                                                id={`new-plant-${ext}`}
+                                                className="hidden"
+                                                accept={`.${ext}`}
+                                                onChange={e => {
+                                                    const file = e.target.files?.[0];
+                                                    if (file) {
+                                                        setNewPlantForm({
+                                                            ...newPlantForm,
+                                                            certFiles: { ...newPlantForm.certFiles, [ext]: file }
+                                                        });
+                                                    }
+                                                }}
+                                            />
+                                            <label
+                                                htmlFor={`new-plant-${ext}`}
+                                                className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-blue-600 hover:bg-blue-50 transition-all cursor-pointer"
+                                            >
+                                                Choose File
+                                            </label>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
+                        </div>
+
+                        <div className="p-8 border-t border-slate-100 bg-slate-50 flex gap-4 rounded-b-3xl">
+                            <button
+                                onClick={() => setAddingPlantToUser(null)}
+                                className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-white transition-all"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleSaveNewPlant}
+                                disabled={isSubmitting}
+                                className={cn(
+                                    "flex-[2] px-6 py-3 rounded-xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-2",
+                                    isSubmitting && "opacity-70 cursor-not-allowed"
+                                )}
+                            >
+                                {isSubmitting ? <RefreshCw size={20} className="animate-spin" /> : "Create Plant"}
+                            </button>
                         </div>
                     </div>
                 )
             }
-        </div >
+        </div>
     );
 };
 

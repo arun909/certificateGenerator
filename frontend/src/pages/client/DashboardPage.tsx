@@ -102,8 +102,9 @@ const DashboardPage: React.FC = () => {
                     await html5QrCode.start(
                         cameraId,
                         {
-                            fps: 10,
-                            qrbox: { width: 250, height: 250 },
+                            fps: 15,
+                            qrbox: { width: 300, height: 300 },
+                            aspectRatio: 1.0,
                         },
                         (decodedText) => {
                             if (isSubscribed) onScanSuccess(decodedText);
@@ -192,12 +193,114 @@ const DashboardPage: React.FC = () => {
             setDownloadUrl(url);
             setLastGenerated(data.filename);
             setDeviceDetails(data.details);
+
+            // Refresh assets so limits/device count update immediately
+            await fetchMyAssets();
         } catch (err: any) {
             console.error(err);
             setError(err.message);
         } finally {
             setIsGenerating(false);
         }
+    };
+
+    // --- Image Pre-processing Helpers for Poor Quality QR Codes ---
+    const loadImageAsCanvas = (file: File): Promise<HTMLCanvasElement> => {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                // Scale up small images for better detection
+                const scale = Math.max(1, Math.min(3, 1000 / Math.max(img.width, img.height)));
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width * scale;
+                canvas.height = img.height * scale;
+                const ctx = canvas.getContext('2d')!;
+                // Use high-quality scaling
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve(canvas);
+            };
+            img.onerror = reject;
+            img.src = URL.createObjectURL(file);
+        });
+    };
+
+    const applyContrastStretch = (canvas: HTMLCanvasElement): HTMLCanvasElement => {
+        const ctx = canvas.getContext('2d')!;
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+
+        // Find min/max luminance
+        let min = 255, max = 0;
+        for (let i = 0; i < data.length; i += 4) {
+            const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            if (gray < min) min = gray;
+            if (gray > max) max = gray;
+        }
+
+        const range = max - min || 1;
+        for (let i = 0; i < data.length; i += 4) {
+            data[i] = Math.min(255, Math.max(0, ((data[i] - min) / range) * 255));
+            data[i + 1] = Math.min(255, Math.max(0, ((data[i + 1] - min) / range) * 255));
+            data[i + 2] = Math.min(255, Math.max(0, ((data[i + 2] - min) / range) * 255));
+        }
+        ctx.putImageData(imageData, 0, 0);
+        return canvas;
+    };
+
+    const applySharpen = (canvas: HTMLCanvasElement): HTMLCanvasElement => {
+        const ctx = canvas.getContext('2d')!;
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const src = imageData.data;
+        const output = ctx.createImageData(canvas.width, canvas.height);
+        const dst = output.data;
+        const w = canvas.width;
+        const h = canvas.height;
+
+        // Unsharp mask kernel
+        const kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+
+        for (let y = 1; y < h - 1; y++) {
+            for (let x = 1; x < w - 1; x++) {
+                for (let c = 0; c < 3; c++) {
+                    let val = 0;
+                    for (let ky = -1; ky <= 1; ky++) {
+                        for (let kx = -1; kx <= 1; kx++) {
+                            const idx = ((y + ky) * w + (x + kx)) * 4 + c;
+                            val += src[idx] * kernel[(ky + 1) * 3 + (kx + 1)];
+                        }
+                    }
+                    dst[(y * w + x) * 4 + c] = Math.min(255, Math.max(0, val));
+                }
+                dst[(y * w + x) * 4 + 3] = 255;
+            }
+        }
+        ctx.putImageData(output, 0, 0);
+        return canvas;
+    };
+
+    const applyBinarize = (canvas: HTMLCanvasElement): HTMLCanvasElement => {
+        const ctx = canvas.getContext('2d')!;
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+
+        // Compute adaptive threshold using block mean
+        for (let i = 0; i < data.length; i += 4) {
+            const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            const val = gray > 128 ? 255 : 0;
+            data[i] = data[i + 1] = data[i + 2] = val;
+        }
+        ctx.putImageData(imageData, 0, 0);
+        return canvas;
+    };
+
+    const canvasToFile = (canvas: HTMLCanvasElement): Promise<File> => {
+        return new Promise((resolve) => {
+            canvas.toBlob((blob) => {
+                resolve(new File([blob!], 'processed-qr.png', { type: 'image/png' }));
+            }, 'image/png', 1.0);
+        });
     };
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -211,14 +314,44 @@ const DashboardPage: React.FC = () => {
 
         const html5QrCode = new Html5Qrcode("reader-hidden");
 
+        // Try multiple processing levels for robustness
+        const processingPipelines: Array<{ name: string; process: (c: HTMLCanvasElement) => HTMLCanvasElement }> = [
+            { name: 'original', process: (c) => c },
+            { name: 'contrast', process: (c) => applyContrastStretch(c) },
+            { name: 'contrast+sharpen', process: (c) => applySharpen(applyContrastStretch(c)) },
+            { name: 'contrast+sharpen+binarize', process: (c) => applyBinarize(applySharpen(applyContrastStretch(c))) },
+            { name: 'binarize-only', process: (c) => applyBinarize(c) },
+        ];
+
+        // First try the raw file directly (fastest path)
         try {
             const decodedText = await html5QrCode.scanFile(file, true);
             await handleGenerateCertificate(decodedText);
-        } catch (err: any) {
-            console.error("File Scan Error:", err);
-            setError("Could not find a valid QR code in this image. Please try another photo.");
-            setIsGenerating(false);
+            return;
+        } catch {
+            console.log('[QR] Direct scan failed, trying enhanced processing...');
         }
+
+        // Try each processing pipeline
+        for (const pipeline of processingPipelines.slice(1)) {
+            try {
+                const canvas = await loadImageAsCanvas(file);
+                const processed = pipeline.process(canvas);
+                const processedFile = await canvasToFile(processed);
+                console.log(`[QR] Trying pipeline: ${pipeline.name}`);
+
+                const decodedText = await html5QrCode.scanFile(processedFile, true);
+                console.log(`[QR] Success with pipeline: ${pipeline.name}`);
+                await handleGenerateCertificate(decodedText);
+                return;
+            } catch {
+                console.log(`[QR] Pipeline '${pipeline.name}' failed, trying next...`);
+            }
+        }
+
+        // All pipelines failed
+        setError("Could not find a valid QR code in this image. Please try a clearer photo with better lighting and less glare.");
+        setIsGenerating(false);
     };
 
     const handlePlantSelect = (plantName: string, appId: string | null) => {

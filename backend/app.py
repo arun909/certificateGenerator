@@ -258,6 +258,12 @@ def update_plant_certs():
                         pc.setdefault("cert_paths", {}).update(cert_paths)
                     if cert_contents:
                         pc.setdefault("cert_contents", {}).update(cert_contents)
+                    
+                    if request.form.get("mqtt_broker"):
+                        pc["mqtt_broker"] = request.form.get("mqtt_broker")
+                    if request.form.get("mqtt_port"):
+                        pc["mqtt_port"] = int(request.form.get("mqtt_port"))
+                        
                     updated = True
                     break
 
@@ -265,7 +271,9 @@ def update_plant_certs():
                 plant_certs.append({
                     "plant_name": plant_name,
                     "cert_paths": cert_paths,
-                    "cert_contents": cert_contents
+                    "cert_contents": cert_contents,
+                    "mqtt_broker": request.form.get("mqtt_broker", "192.168.0.23"),
+                    "mqtt_port": int(request.form.get("mqtt_port", 8883))
                 })
 
             db.customers.update_one(
@@ -329,7 +337,9 @@ def add_plant():
         plant_certs.append({
             "plant_name": plant_name, 
             "cert_paths": cert_paths,
-            "cert_contents": cert_contents
+            "cert_contents": cert_contents,
+            "mqtt_broker": request.form.get("mqtt_broker", "192.168.0.23"),
+            "mqtt_port": int(request.form.get("mqtt_port", 8883))
         })
         db.customers.update_one(
             {"_id": customer_oid},
@@ -456,7 +466,9 @@ def onboard_system():
                     {"$push": {"plant_certs": {
                         "plant_name": plant_name,
                         "cert_paths": cert_paths,
-                        "cert_contents": cert_contents
+                        "cert_contents": cert_contents,
+                        "mqtt_broker": plant_item.get("mqtt_broker", "192.168.0.23"),
+                        "mqtt_port": int(plant_item.get("mqtt_port", 8883))
                     }}}
                 )
 
@@ -825,8 +837,8 @@ def generate_certificate():
             "device_id": device_id_str,
             "endpoint_id": device_token,
             "app_version": app_version,
-            "mqtt_broker": "192.168.0.23",
-            "mqtt_port": 8883
+            "mqtt_broker": "192.168.0.23", # Default
+            "mqtt_port": 8883               # Default
         }
 
         # Preparation
@@ -857,6 +869,13 @@ def generate_certificate():
                             active_ca_crt = pc["cert_paths"]["crt"]
                             active_ca_key = pc["cert_paths"]["key"]
                             print(f"[generate-certificate] Falling back to file-path certs for plant {plant_name}")
+                        
+                        # Use stored MQTT details if available
+                        if pc.get("mqtt_broker"):
+                            details["mqtt_broker"] = pc["mqtt_broker"]
+                        if pc.get("mqtt_port"):
+                            details["mqtt_port"] = pc["mqtt_port"]
+                        
                         break
 
         try:
@@ -1045,8 +1064,8 @@ def generate_certificate_manual():
             "application_name": application.get("name"),
             "application_id": str(application.get("_id")),
             "plant_name": plant_name,
-            "mqtt_broker": "192.168.0.23",
-            "mqtt_port": 8883
+            "mqtt_broker": active_pc.get("mqtt_broker", "192.168.0.23"),
+            "mqtt_port": active_pc.get("mqtt_port", 8883)
         }
         try:
             device_dir = os.path.join(temp_dir, device_name)
