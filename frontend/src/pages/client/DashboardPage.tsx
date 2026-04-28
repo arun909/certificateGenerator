@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { QrCode, Upload, LogOut, LayoutDashboard, X, Loader2, CheckCircle2, Download, Shield, HardDrive, AlertCircle, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -13,24 +13,26 @@ const DashboardPage: React.FC = () => {
     // UI State
     const [isScanning, setIsScanning] = useState(false);
     const [showPlantSelector, setShowPlantSelector] = useState(false);
-    const [pendingOperation, setPendingOperation] = useState<'scan' | 'upload' | null>(null);
     const [cameraError, setCameraError] = useState<string | null>(null);
     const [isGenerating, setIsGenerating] = useState(false);
-    const [selectedPlantName, setSelectedPlantName] = useState<string | null>(null);
-    const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
     const [selectedAppForPlant, setSelectedAppForPlant] = useState<Record<string, string>>({});
     const [lastGenerated, setLastGenerated] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [deviceDetails, setDeviceDetails] = useState<any | null>(null);
+    const [pendingQrData, setPendingQrData] = useState<string | null>(null);
+    const [duplicateDevice, setDuplicateDevice] = useState<{ name: string; device_id_string: string; plant_name?: string } | null>(null);
 
 
     const [applications, setApplications] = useState<any[]>([]);
     const [devices, setDevices] = useState<any[]>([]);
     const [plantCerts, setPlantCerts] = useState<any[]>([]);
     const [limits, setLimits] = useState<{ app_limit: number; device_limit: number } | null>(null);
+    const [deviceUsageCount, setDeviceUsageCount] = useState<number>(0);
+    const [uniqueDeviceCount, setUniqueDeviceCount] = useState<number>(0);
     const [isLoadingAssets, setIsLoadingAssets] = useState(true);
     const [expandedApp, setExpandedApp] = useState<string | null>(null);
+
 
     const fetchMyAssets = async () => {
         if (!user?.customer_id) return;
@@ -44,6 +46,8 @@ const DashboardPage: React.FC = () => {
                 const stats = await statsRes.json();
                 setLimits({ app_limit: stats.app_limit || 5, device_limit: stats.device_limit || 10 });
                 setPlantCerts(stats.plant_certs || []);
+                setDeviceUsageCount(typeof stats.device_count === 'number' ? stats.device_count : 0);
+                setUniqueDeviceCount(typeof stats.unique_device_count === 'number' ? stats.unique_device_count : 0);
             }
             if (appsRes.ok) setApplications(await appsRes.json());
             if (devsRes.ok) setDevices(await devsRes.json());
@@ -151,13 +155,18 @@ const DashboardPage: React.FC = () => {
 
     const onScanSuccess = async (decodedText: string) => {
         setIsScanning(false);
-        await handleGenerateCertificate(decodedText);
+        setPendingQrData(decodedText);
+        setShowPlantSelector(true);
     };
 
-    const handleGenerateCertificate = async (qrData: string) => {
+    const handleGenerateCertificate = async (qrData: string, plantName: string | null, appId: string | null) => {
+        const customerId = user?.customer_id;
+        const customerName = user?.customer_name;
+
         setIsGenerating(true);
         setError(null);
         setLastGenerated(null);
+        if (downloadUrl) window.URL.revokeObjectURL(downloadUrl);
         setDownloadUrl(null);
 
         try {
@@ -166,16 +175,24 @@ const DashboardPage: React.FC = () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     qrData,
-                    plant_name: selectedPlantName, // Send the explicitly selected plant
-                    application_id: selectedAppId, // Send optionally selected application
+                    plant_name: plantName,
+                    application_id: appId,
                     userContext: {
-                        customer_id: user?.customer_id,
-                        customer_name: user?.customer_name
+                        customer_id: customerId,
+                        customer_name: customerName
                     }
                 })
             });
 
             const data = await response.json();
+
+            if (response.status === 409 && data.duplicate) {
+                // Duplicate device — show a dedicated banner and close the selector
+                setShowPlantSelector(false);
+                setPendingQrData(null);
+                setDuplicateDevice(data.existing_device || { name: 'Unknown', device_id_string: '' });
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(data.error || `Server responded with ${response.status}`);
@@ -194,8 +211,11 @@ const DashboardPage: React.FC = () => {
             setLastGenerated(data.filename);
             setDeviceDetails(data.details);
 
-            // Refresh assets so limits/device count update immediately
             await fetchMyAssets();
+
+            // Instantly hide the window after successful generation
+            setShowPlantSelector(false);
+            setPendingQrData(null);
         } catch (err: any) {
             console.error(err);
             setError(err.message);
@@ -326,7 +346,9 @@ const DashboardPage: React.FC = () => {
         // First try the raw file directly (fastest path)
         try {
             const decodedText = await html5QrCode.scanFile(file, true);
-            await handleGenerateCertificate(decodedText);
+            setPendingQrData(decodedText);
+            setShowPlantSelector(true);
+            setIsGenerating(false);
             return;
         } catch {
             console.log('[QR] Direct scan failed, trying enhanced processing...');
@@ -342,7 +364,9 @@ const DashboardPage: React.FC = () => {
 
                 const decodedText = await html5QrCode.scanFile(processedFile, true);
                 console.log(`[QR] Success with pipeline: ${pipeline.name}`);
-                await handleGenerateCertificate(decodedText);
+                setPendingQrData(decodedText);
+                setShowPlantSelector(true);
+                setIsGenerating(false);
                 return;
             } catch {
                 console.log(`[QR] Pipeline '${pipeline.name}' failed, trying next...`);
@@ -354,21 +378,15 @@ const DashboardPage: React.FC = () => {
         setIsGenerating(false);
     };
 
-    const handlePlantSelect = (plantName: string, appId: string | null) => {
-        setSelectedPlantName(plantName);
-        setSelectedAppId(appId);
-        setShowPlantSelector(false);
-        if (pendingOperation === 'scan') {
-            setIsScanning(true);
-        } else if (pendingOperation === 'upload') {
-            document.getElementById('qr-upload-input')?.click();
-        }
+    const handleFinalizeGeneration = async (plantName: string, appId: string | null) => {
+        if (!pendingQrData) return;
+        await handleGenerateCertificate(pendingQrData, plantName, appId);
     };
 
     const hasReachedDeviceLimit = Boolean(
         limits &&
         typeof limits.device_limit === 'number' &&
-        devices.length >= limits.device_limit
+        deviceUsageCount >= limits.device_limit
     );
 
     return (
@@ -404,6 +422,47 @@ const DashboardPage: React.FC = () => {
                     <h1 className="text-3xl font-bold text-slate-900 mb-2">Welcome Back!</h1>
                     <p className="text-slate-500">Choose an option below to manage your QR operations.</p>
                 </header>
+
+                {/* Duplicate device notification — amber, distinct from generic errors */}
+                {duplicateDevice && (
+                    <div className="mb-8 p-5 bg-amber-50 border border-amber-200 rounded-2xl animate-in fade-in slide-in-from-top-2">
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                                <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                    <AlertCircle size={18} />
+                                </div>
+                                <div>
+                                    <p className="text-sm font-bold text-amber-800 mb-1">Device Already Provisioned</p>
+                                    <p className="text-xs text-amber-700 leading-relaxed">
+                                        A device with these credentials already exists in your account.
+                                    </p>
+                                    <div className="mt-3 grid grid-cols-2 gap-2">
+                                        <div className="bg-white border border-amber-100 rounded-xl px-3 py-2">
+                                            <span className="text-[9px] font-bold text-amber-500 uppercase tracking-wider block">Device Name</span>
+                                            <span className="text-xs font-bold text-slate-800">{duplicateDevice.name}</span>
+                                        </div>
+                                        <div className="bg-white border border-amber-100 rounded-xl px-3 py-2">
+                                            <span className="text-[9px] font-bold text-amber-500 uppercase tracking-wider block">Device ID</span>
+                                            <span className="text-xs font-mono text-slate-700 truncate block">{duplicateDevice.device_id_string || '—'}</span>
+                                        </div>
+                                        {duplicateDevice.plant_name && (
+                                            <div className="bg-white border border-amber-100 rounded-xl px-3 py-2 col-span-2">
+                                                <span className="text-[9px] font-bold text-amber-500 uppercase tracking-wider block">Plant</span>
+                                                <span className="text-xs font-bold text-blue-700">{duplicateDevice.plant_name}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setDuplicateDevice(null)}
+                                className="p-1.5 hover:bg-amber-100 rounded-lg text-amber-400 transition-colors flex-shrink-0"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {error && (
                     <div className="mb-8 p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center space-x-3 text-red-600 animate-in fade-in slide-in-from-top-2">
@@ -480,8 +539,7 @@ const DashboardPage: React.FC = () => {
                                 setError('Device limit reached');
                                 return;
                             }
-                            setPendingOperation('scan');
-                            setShowPlantSelector(true);
+                            setIsScanning(true);
                         }}
                         className="group relative flex flex-col items-center justify-center p-10 bg-white border-2 border-slate-100 rounded-3xl shadow-xl shadow-slate-200/50 hover:border-blue-500 transition-all hover:scale-[1.02] cursor-pointer overflow-hidden"
                     >
@@ -497,7 +555,7 @@ const DashboardPage: React.FC = () => {
                         </div>
                         <h2 className="text-2xl font-bold text-slate-900 mb-2">Scan QR</h2>
                         <p className="text-center text-slate-500 max-w-[240px] text-sm">
-                            Select a plant and scan a device QR code instantly.
+                            Scan a device QR code instantly to select its plant.
                         </p>
                     </button>
 
@@ -508,8 +566,7 @@ const DashboardPage: React.FC = () => {
                                 setError('Device limit reached');
                                 return;
                             }
-                            setPendingOperation('upload');
-                            setShowPlantSelector(true);
+                            document.getElementById('qr-upload-input')?.click();
                         }}
                         className="group relative flex flex-col items-center justify-center p-10 bg-white border-2 border-slate-100 rounded-3xl shadow-xl shadow-slate-200/50 hover:border-purple-500 transition-all hover:scale-[1.02] cursor-pointer text-center"
                     >
@@ -518,7 +575,7 @@ const DashboardPage: React.FC = () => {
                         </div>
                         <h2 className="text-2xl font-bold text-slate-900 mb-2">Upload QR</h2>
                         <p className="text-center text-slate-500 max-w-[240px] text-sm">
-                            Select a plant and upload a device QR code image.
+                            Upload a device QR code image to select its plant.
                         </p>
                         <input
                             id="qr-upload-input"
@@ -546,8 +603,11 @@ const DashboardPage: React.FC = () => {
                             <div className="flex gap-4">
                                 <div className="bg-white border rounded-xl px-4 py-2 shadow-sm text-sm">
                                     <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">Device Limit</span>
-                                    <span className="font-bold text-slate-800">{devices.length}</span>
+                                    <span className="font-bold text-slate-800">{deviceUsageCount}</span>
                                     <span className="text-slate-400 font-medium"> / {limits.device_limit}</span>
+                                    <div className="text-[10px] text-slate-400 font-semibold mt-0.5">
+                                        Unique devices: {uniqueDeviceCount}
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -594,10 +654,13 @@ const DashboardPage: React.FC = () => {
                             <div className="grid grid-cols-1 gap-8">
                                 {plantsToRender.map(plant => {
                                     const hasCerts = plant.certs && Object.keys(plant.certs || {}).length === 3;
+                                    const plantOrphans = devices.filter(
+                                        (d: any) => !d.application_id && d.plant_name === plant.name
+                                    );
                                     const plantDeviceCount = plant.apps.reduce((sum, app) => {
                                         const appDevs = devices.filter(d => d.application_id === app._id);
                                         return sum + appDevs.length;
-                                    }, 0);
+                                    }, 0) + plantOrphans.length;
 
                                     return (
                                         <div key={plant.name} className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col group/plant shadow-slate-200/50">
@@ -835,11 +898,21 @@ const DashboardPage: React.FC = () => {
                                                     </select>
                                                 </div>
                                                 <button
-                                                    onClick={() => handlePlantSelect(pc.plant_name, selectedAppForPlant[pc.plant_name] || null)}
-                                                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-sm transition-colors flex items-center justify-center gap-2"
+                                                    onClick={() => handleFinalizeGeneration(pc.plant_name, selectedAppForPlant[pc.plant_name] || null)}
+                                                    disabled={isGenerating}
+                                                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
                                                 >
-                                                    Proceed
-                                                    <ChevronRight size={16} />
+                                                    {isGenerating ? (
+                                                        <>
+                                                            <Loader2 size={16} className="animate-spin" />
+                                                            Generating...
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            Generate Certificate
+                                                            <ChevronRight size={16} />
+                                                        </>
+                                                    )}
                                                 </button>
                                             </div>
                                         </div>

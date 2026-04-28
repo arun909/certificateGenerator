@@ -16,12 +16,15 @@ import {
     Server,
     Shield,
     HardDrive,
-    Download
+    Download,
+    Upload,
+    Link
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import conqueLogo from "@/assets/conque.png";
+import { Html5Qrcode } from 'html5-qrcode';
 
 const AdminDashboard: React.FC = () => {
     const { user, isAuthenticated, logout } = useAuth();
@@ -99,6 +102,62 @@ const AdminDashboard: React.FC = () => {
     // Add Device Modal State
     const [addingDeviceToApp, setAddingDeviceToApp] = useState<{ appId: string; customerId: string } | null>(null);
     const [newDeviceForm, setNewDeviceForm] = useState({ name: '', device_id: '', version: '' });
+
+    const handleImportPackage = async (e: React.ChangeEvent<HTMLInputElement>, customerId: string) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('customer_id', customerId);
+
+        setIsLoadingDrillDown(true);
+        try {
+            const response = await fetch(`${BASE_URL}/api/admin/provision-from-zip`, {
+                method: 'POST',
+                body: formData,
+                credentials: 'include'
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error);
+
+            alert(`Successfully provisioned device: ${data.details.device_name}`);
+            await refreshExpandedCustomerData(customerId);
+        } catch (err: any) {
+            alert(`Import failed: ${err.message}`);
+        } finally {
+            setIsLoadingDrillDown(false);
+            e.target.value = ''; // Reset input
+        }
+    };
+
+    const handleAutoFillFromQR = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const html5QrCode = new Html5Qrcode("admin-reader-hidden");
+        try {
+            const decodedText = await html5QrCode.scanFile(file, true);
+            const response = await fetch(`${BASE_URL}/api/admin/decrypt-qr`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ qrData: decodedText })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error);
+
+            setNewDeviceForm({
+                name: data.device_name || '',
+                device_id: data.device_id || '',
+                version: data.app_version || '1.0'
+            });
+        } catch (err: any) {
+            alert(`Failed to decode QR: ${err.message}`);
+        } finally {
+            e.target.value = '';
+        }
+    };
+
 
     // Plant Edit State
     const [editingPlant, setEditingPlant] = useState<{
@@ -237,11 +296,78 @@ const AdminDashboard: React.FC = () => {
         }
     };
 
+    const refreshExpandedCustomerData = async (customerId: string) => {
+        setIsLoadingDrillDown(true);
+        try {
+            const [apps, stats, certs, allDevs] = await Promise.all([
+                fetchWithAuth(`/api/applications?customer_id=${customerId}`),
+                fetchWithAuth(`/api/customers/${customerId}/stats`),
+                fetchWithAuth(`/api/admin/certificates?customer_id=${customerId}`),
+                fetchWithAuth(`/api/devices?customer_id=${customerId}`)
+            ]);
+            setUserApps(apps);
+            setUserStats(prev => ({ ...prev, [customerId]: stats }));
+            setUserCerts(certs || []);
+            setUserOrphanDevices(allDevs.filter((d: any) => !d.application_id));
+
+            // Sync the expanded-app device list from the embedded devices already in the apps response
+            setAppDevices(prev => {
+                if (!expandedApp) return prev;
+                const freshApp = (apps as any[]).find((a: any) => a._id === expandedApp);
+                return freshApp ? (freshApp.devices || []) : prev;
+            });
+
+            // Re-fetch the user list so the top-level device count / usage bar reflects the change
+            fetchUsers();
+        } catch (err) {
+            console.error('Failed to refresh expanded customer data:', err);
+        } finally {
+            setIsLoadingDrillDown(false);
+        }
+    };
+
     React.useEffect(() => {
         if (activeTab === 'users') {
             fetchUsers();
         }
     }, [activeTab]);
+
+    // Keep device usage counts fresh while the admin panel is open.
+    React.useEffect(() => {
+        if (activeTab !== 'users') return;
+
+        const tick = () => {
+            if (document.visibilityState === 'visible') fetchUsers();
+        };
+
+        document.addEventListener('visibilitychange', tick);
+        const interval = window.setInterval(tick, 5000);
+        return () => {
+            document.removeEventListener('visibilitychange', tick);
+            window.clearInterval(interval);
+        };
+    }, [activeTab]);
+
+    // If a user is expanded, also keep the drill-down counts fresh.
+    React.useEffect(() => {
+        if (!expandedUser) return;
+
+        const customerId = sessionStorage.getItem('expandedCustId');
+        if (!customerId) return;
+
+        const tick = () => {
+            if (document.visibilityState !== 'visible') return;
+            if (isLoadingDrillDown) return;
+            refreshExpandedCustomerData(customerId);
+        };
+
+        document.addEventListener('visibilitychange', tick);
+        const interval = window.setInterval(tick, 5000);
+        return () => {
+            document.removeEventListener('visibilitychange', tick);
+            window.clearInterval(interval);
+        };
+    }, [expandedUser, isLoadingDrillDown]);
 
     React.useEffect(() => {
         const savedUserId = sessionStorage.getItem('expandedUserId');
@@ -530,13 +656,9 @@ const AdminDashboard: React.FC = () => {
                 setExpandedApp(null);
                 setAppDevices([]);
             }
-            if (expandedUser) {
-                const user = users.find(u => u._id === expandedUser);
-                if (user) {
-                    const apps = await fetchWithAuth(`/api/applications?customer_id=${user.customer_id}`);
-                    setUserApps(apps);
-                }
-            }
+            // Refresh everything (apps, certs, devices) so cascaded cert deletions are reflected
+            const customerId = sessionStorage.getItem('expandedCustId');
+            if (customerId) await refreshExpandedCustomerData(customerId);
         } catch (err: any) {
             alert(`Delete failed: ${err.message}`);
         } finally {
@@ -632,7 +754,12 @@ const AdminDashboard: React.FC = () => {
         setIsLoadingDrillDown(true);
         try {
             await fetchWithAuth(`/api/devices/${deviceId}`, { method: 'DELETE' });
-            if (expandedApp) {
+            // Refresh everything (devices list, certs) so cascaded cert deletion is reflected immediately
+            const customerId = sessionStorage.getItem('expandedCustId');
+            if (customerId) {
+                await refreshExpandedCustomerData(customerId);
+            } else if (expandedApp) {
+                // Fallback: at minimum refresh the device list for the open app
                 const devices = await fetchWithAuth(`/api/devices?application_id=${expandedApp}`);
                 setAppDevices(devices);
             }
@@ -664,23 +791,7 @@ const AdminDashboard: React.FC = () => {
         setExpandedUser(userId);
         sessionStorage.setItem('expandedUserId', userId);
         sessionStorage.setItem('expandedCustId', customerId);
-        setIsLoadingDrillDown(true);
-        try {
-            const [apps, stats, certs, allDevs] = await Promise.all([
-                fetchWithAuth(`/api/applications?customer_id=${customerId}`),
-                fetchWithAuth(`/api/customers/${customerId}/stats`),
-                fetchWithAuth(`/api/admin/certificates?customer_id=${customerId}`),
-                fetchWithAuth(`/api/devices?customer_id=${customerId}`)
-            ]);
-            setUserApps(apps);
-            setUserStats(prev => ({ ...prev, [customerId]: stats }));
-            setUserCerts(certs || []);
-            setUserOrphanDevices(allDevs.filter((d: any) => !d.application_id));
-        } catch (err) {
-            console.error('Failed to fetch apps/stats/certs:', err);
-        } finally {
-            setIsLoadingDrillDown(false);
-        }
+        await refreshExpandedCustomerData(customerId);
     };
 
     const handleDownloadCert = async (certId: string, filename: string) => {
@@ -1299,6 +1410,20 @@ const AdminDashboard: React.FC = () => {
                                                                     >
                                                                         + New Application
                                                                     </button>
+                                                                    <button
+                                                                        onClick={() => document.getElementById(`import-pkg-${user.customer_id}`)?.click()}
+                                                                        className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold hover:bg-purple-700 shadow-lg shadow-purple-500/20 transition-all"
+                                                                    >
+                                                                        <Upload size={14} />
+                                                                        Import Package
+                                                                    </button>
+                                                                    <input
+                                                                        type="file"
+                                                                        id={`import-pkg-${user.customer_id}`}
+                                                                        className="hidden"
+                                                                        accept=".zip"
+                                                                        onChange={(e) => handleImportPackage(e, user.customer_id)}
+                                                                    />
                                                                 </div>
                                                             </div>
 
@@ -1591,11 +1716,13 @@ const AdminDashboard: React.FC = () => {
                                                                             const formattedTime = createdAt
                                                                                 ? createdAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
                                                                                 : '';
+                                                                            const isDeviceLinked = Boolean(cert.linked_device_id);
                                                                             return (
                                                                                 <div key={cert._id} className={cn(
                                                                                     "bg-white border rounded-xl p-3 flex flex-col gap-2 shadow-sm transition-all",
                                                                                     hasZip ? "border-slate-100 hover:shadow-md" : "border-dashed border-slate-200 opacity-70"
                                                                                 )}>
+                                                                                    {/* Header row: device name + download button */}
                                                                                     <div className="flex items-start justify-between">
                                                                                         <div className="flex flex-col flex-1 min-w-0">
                                                                                             <span className="text-xs font-bold text-slate-700 truncate">{cert.device_name || 'Unknown Device'}</span>
@@ -1614,6 +1741,21 @@ const AdminDashboard: React.FC = () => {
                                                                                             <Download size={14} />
                                                                                         </button>
                                                                                     </div>
+
+                                                                                    {/* Device DB link indicator */}
+                                                                                    <div className={cn(
+                                                                                        "flex items-center gap-1.5 px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-wider w-fit",
+                                                                                        isDeviceLinked
+                                                                                            ? "bg-teal-50 text-teal-700"
+                                                                                            : "bg-slate-100 text-slate-400"
+                                                                                    )}>
+                                                                                        <Link size={9} />
+                                                                                        {isDeviceLinked
+                                                                                            ? `Device Linked · ${cert.linked_device_id!.slice(-6)}`
+                                                                                            : 'No device record'}
+                                                                                    </div>
+
+                                                                                    {/* Footer row: date + badges */}
                                                                                     <div className="flex items-center justify-between gap-2">
                                                                                         <div className="flex flex-col">
                                                                                             <span className="text-xs font-bold text-slate-600">{formattedDate}</span>
@@ -1897,7 +2039,22 @@ const AdminDashboard: React.FC = () => {
                             </div>
                             <div className="p-6 space-y-4">
                                 <div className="space-y-2">
-                                    <label className="text-sm font-semibold text-slate-700">Device Name <span className="text-red-500">*</span></label>
+                                    <div className="flex items-center justify-between">
+                                        <label className="text-sm font-semibold text-slate-700">Device Name <span className="text-red-500">*</span></label>
+                                        <button
+                                            onClick={() => document.getElementById('admin-qr-refill')?.click()}
+                                            className="text-[10px] font-bold text-indigo-600 hover:underline flex items-center gap-1"
+                                        >
+                                            <Upload size={10} /> Auto-fill from QR
+                                        </button>
+                                        <input
+                                            id="admin-qr-refill"
+                                            type="file"
+                                            className="hidden"
+                                            accept="image/*"
+                                            onChange={handleAutoFillFromQR}
+                                        />
+                                    </div>
                                     <input
                                         type="text"
                                         placeholder="e.g. Sensor Node Alpha"
@@ -2348,6 +2505,8 @@ const AdminDashboard: React.FC = () => {
                     </div>
                 )
             }
+            {/* Hidden reader for scanning */}
+            <div id="admin-reader-hidden" className="hidden"></div>
         </div>
     );
 };

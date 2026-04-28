@@ -147,6 +147,14 @@ def is_primary_admin_customer(customer_id: ObjectId) -> bool:
     primary = db.users.find_one({"email": PRIMARY_SUPERADMIN_EMAIL}, {"customer_id": 1})
     return bool(primary and primary.get("customer_id") == customer_id)
 
+def usage_device_count(customer_id: ObjectId) -> int:
+    """
+    Device usage count based on unique provisioned device records.
+    A re-scan of an existing device is blocked before reaching this point,
+    so this count reflects genuinely distinct devices only.
+    """
+    return db.devices.count_documents({"customer_id": customer_id})
+
 # --- Authentication APIs ---
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -202,7 +210,7 @@ def get_users():
         customer = db.customers.find_one({"_id": c_id})
         if customer:
             u["device_limit"] = customer.get("device_limit", 10)
-            u["device_count"] = db.devices.count_documents({"customer_id": c_id})
+            u["device_count"] = usage_device_count(c_id)
             u["customer_name"] = customer.get("name", "")
         
         enriched_users.append(u)
@@ -630,10 +638,12 @@ def get_customer_stats(customer_id):
     if not customer:
         return jsonify({"error": "Customer not found"}), 404
     app_count = db.applications.count_documents({"customer_id": oid})
-    device_count = db.devices.count_documents({"customer_id": oid})
+    device_count = usage_device_count(oid)
+    unique_device_count = db.devices.count_documents({"customer_id": oid})
     return jsonify({
         "app_count": app_count,
         "device_count": device_count,
+        "unique_device_count": unique_device_count,
         "device_limit": customer.get("device_limit", 10),
         "plant_certs": customer.get("plant_certs", [])
     })
@@ -701,13 +711,22 @@ def update_application(app_id):
         
         db.applications.update_one({"_id": ObjectId(app_id)}, {"$set": update_fields})
         return jsonify({"success": True})
-    
+
     if request.method == "DELETE":
         existing_app = db.applications.find_one({"_id": ObjectId(app_id)}, {"customer_id": 1})
         if existing_app and is_primary_admin_customer(existing_app["customer_id"]):
             return jsonify({"error": "Application deletion is disabled for the system admin account"}), 403
+
+        # Cascade: collect devices first so we can delete their certificates
+        devices_to_delete = list(db.devices.find({"application_id": ObjectId(app_id)}, {"_id": 1}))
+        device_oids = [d["_id"] for d in devices_to_delete]
+
         db.applications.delete_one({"_id": ObjectId(app_id)})
         deleted_devices = db.devices.delete_many({"application_id": ObjectId(app_id)})
+
+        # Delete certificates linked to any of those devices
+        if device_oids:
+            db.certificates.delete_many({"device_oid": {"$in": device_oids}})
         return jsonify({"success": True, "devices_deleted": deleted_devices.deleted_count})
 
 @app.route("/api/devices", methods=["GET", "POST"])
@@ -772,7 +791,24 @@ def update_device(device_id):
         return jsonify({"success": True})
     
     if request.method == "DELETE":
-        db.devices.delete_one({"_id": ObjectId(device_id)})
+        device_oid = ObjectId(device_id)
+        # Fetch the device so we can match legacy certs that lack device_oid
+        device_doc = db.devices.find_one({"_id": device_oid}, {"device_id_string": 1, "customer_id": 1})
+        db.devices.delete_one({"_id": device_oid})
+        # Cascade: delete all certificates for this device
+        # Match by stored device_oid first (modern records), then fall back to string-id match (legacy)
+        if device_doc:
+            db.certificates.delete_many({
+                "$or": [
+                    {"device_oid": device_oid},
+                    {
+                        "device_id_string": device_doc.get("device_id_string"),
+                        "customer_id": device_doc.get("customer_id")
+                    }
+                ]
+            })
+        else:
+            db.certificates.delete_many({"device_oid": device_oid})
         return jsonify({"success": True})
 
 # --- Certificate Generation with Limit Checks ---
@@ -801,7 +837,7 @@ def generate_certificate():
         if has_customer and customer_id:
             customer = db.customers.find_one({"_id": customer_id})
             if customer:
-                device_count = db.devices.count_documents({"customer_id": customer_id})
+                device_count = usage_device_count(customer_id)
                 if device_count >= customer.get("device_limit", 10):
                     return jsonify({"error": f"Device limit ({customer['device_limit']}) reached. Cannot provision more devices."}), 403
                     
@@ -831,6 +867,30 @@ def generate_certificate():
             return jsonify({
                 "error": f"Could not extract device details from QR. Missing fields: {', '.join(missing)}. Decrypted content (preview): {decrypted_string[:150]}"
             }), 400
+
+        # --- Duplicate device guard ---
+        if has_customer and customer_id:
+            duplicate = db.devices.find_one({
+                "customer_id": customer_id,
+                "$or": [
+                    {"device_id_string": device_id_str},
+                    {"name": device_name}
+                ]
+            })
+            if duplicate:
+                dup_field = "Device ID" if duplicate.get("device_id_string") == device_id_str else "Device Name"
+                return jsonify({
+                    "error": f"A device with this {dup_field} already exists for your account. "
+                             f"Device '{duplicate.get('name')}' (ID: {duplicate.get('device_id_string')}) "
+                             f"is already provisioned. Please use a unique device.",
+                    "duplicate": True,
+                    "existing_device": {
+                        "name": duplicate.get("name"),
+                        "device_id_string": duplicate.get("device_id_string"),
+                        "plant_name": duplicate.get("plant_name"),
+                        "status": duplicate.get("status")
+                    }
+                }), 409
 
         details = {
             "device_name": device_name,
@@ -943,6 +1003,7 @@ def generate_certificate():
                             "updated_at": datetime.datetime.now(datetime.timezone.utc)
                         }}
                     )
+                    device_oid = existing_device["_id"]
                 else:
                     new_device = {
                         "name": device_name,
@@ -955,12 +1016,14 @@ def generate_certificate():
                         "status": "PROVISIONED",
                         "created_at": datetime.datetime.now(datetime.timezone.utc)
                     }
-                    db.devices.insert_one(new_device)
+                    insert_result = db.devices.insert_one(new_device)
+                    device_oid = insert_result.inserted_id
 
-                # Record log
+                # Record log — include device_oid so certificates are linked to the device entry
                 log = {
                     "device_id_string": device_id_str,
                     "device_name": device_name,
+                    "device_oid": device_oid,
                     "filename": zip_filename,
                     "customer_id": customer_id,
                     "plant_name": plant_name,
@@ -1017,7 +1080,7 @@ def generate_certificate_manual():
         if not application:
             return jsonify({"error": "Application not found."}), 404
             
-        device_count = db.devices.count_documents({"customer_id": customer_id})
+        device_count = usage_device_count(customer_id)
         if device_count >= customer.get("device_limit", 10):
             return jsonify({"error": f"Device limit ({customer['device_limit']}) reached. Cannot provision more devices."}), 403
             
@@ -1031,6 +1094,29 @@ def generate_certificate_manual():
                 
         if not active_pc:
             return jsonify({"error": f"Configuration for plant '{plant_name}' not found."}), 400
+
+        # --- Duplicate device guard ---
+        duplicate = db.devices.find_one({
+            "customer_id": customer_id,
+            "$or": [
+                {"device_id_string": device_id_str},
+                {"name": device_name}
+            ]
+        })
+        if duplicate:
+            dup_field = "Device ID" if duplicate.get("device_id_string") == device_id_str else "Device Name"
+            return jsonify({
+                "error": f"A device with this {dup_field} already exists for your account. "
+                         f"Device '{duplicate.get('name')}' (ID: {duplicate.get('device_id_string')}) "
+                         f"is already provisioned. Please use a unique device.",
+                "duplicate": True,
+                "existing_device": {
+                    "name": duplicate.get("name"),
+                    "device_id_string": duplicate.get("device_id_string"),
+                    "plant_name": duplicate.get("plant_name"),
+                    "status": duplicate.get("status")
+                }
+            }), 409
 
         # Preparation
         temp_dir = tempfile.mkdtemp()
@@ -1116,20 +1202,7 @@ def generate_certificate_manual():
                 zip_binary = zf.read()
                 zip_base64 = base64.b64encode(zip_binary).decode('utf-8')
 
-            # Record log & save zip
-            log = {
-                "device_id_string": device_id_str,
-                "device_name": device_name,
-                "filename": zip_filename,
-                "customer_id": customer_id,
-                "plant_name": plant_name,
-                "application_id": app_oid,
-                "zip_data": zip_base64,
-                "created_at": datetime.datetime.now(datetime.timezone.utc)
-            }
-            db.certificates.insert_one(log)
-
-            # Update or create the actual device
+            # Update or create the actual device FIRST so we can link the certificate to its _id
             existing_device = db.devices.find_one({"device_id_string": device_id_str, "customer_id": customer_id})
             if existing_device:
                 db.devices.update_one(
@@ -1144,6 +1217,7 @@ def generate_certificate_manual():
                         "updated_at": datetime.datetime.now(datetime.timezone.utc)
                     }}
                 )
+                device_oid = existing_device["_id"]
             else:
                 new_device = {
                     "name": device_name,
@@ -1156,7 +1230,22 @@ def generate_certificate_manual():
                     "status": "PROVISIONED",
                     "created_at": datetime.datetime.now(datetime.timezone.utc)
                 }
-                db.devices.insert_one(new_device)
+                dev_result = db.devices.insert_one(new_device)
+                device_oid = dev_result.inserted_id
+
+            # Record log & save zip — include device_oid for certificate↔device linkage
+            log = {
+                "device_id_string": device_id_str,
+                "device_name": device_name,
+                "device_oid": device_oid,
+                "filename": zip_filename,
+                "customer_id": customer_id,
+                "plant_name": plant_name,
+                "application_id": app_oid,
+                "zip_data": zip_base64,
+                "created_at": datetime.datetime.now(datetime.timezone.utc)
+            }
+            db.certificates.insert_one(log)
 
             return jsonify({
                 "success": True,
@@ -1181,8 +1270,24 @@ def get_certificates():
     certs = list(db.certificates.find(query, {"zip_data": 0}).sort("created_at", -1))
     for c in certs:
         c["_id"] = str(c["_id"])
-        if "customer_id" in c: c["customer_id"] = str(c["customer_id"])
-        if "application_id" in c: c["application_id"] = str(c["application_id"])
+        cust_oid = c.get("customer_id")
+        if cust_oid: c["customer_id"] = str(cust_oid)
+        if "application_id" in c: c["application_id"] = str(c["application_id"]) if c["application_id"] else None
+
+        # --- Resolve linked device ObjectId ---
+        # Prefer the stored device_oid; fall back to a lookup for legacy records
+        stored_device_oid = c.pop("device_oid", None)
+        if stored_device_oid:
+            c["linked_device_id"] = str(stored_device_oid)
+        elif c.get("device_id_string") and cust_oid:
+            matched = db.devices.find_one(
+                {"device_id_string": c["device_id_string"], "customer_id": cust_oid},
+                {"_id": 1}
+            )
+            c["linked_device_id"] = str(matched["_id"]) if matched else None
+        else:
+            c["linked_device_id"] = None
+
         # Check if zip_data actually exists in this record (query without zip_data means we need a separate check)
         cert_with_flag = db.certificates.find_one({"_id": ObjectId(c["_id"])}, {"zip_data": 1, "zip_path": 1})
         has_zip = bool(cert_with_flag and cert_with_flag.get("zip_data"))
@@ -1218,6 +1323,115 @@ def download_certificate(cert_id):
             "success": True, 
             "zip_data": zip_data, 
             "filename": cert.get("filename", "certificate_package.zip")
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/admin/provision-from-zip", methods=["POST"])
+def provision_from_zip():
+    try:
+        uploaded_file = request.files.get("file")
+        customer_id_str = request.form.get("customer_id")
+        app_id_str = request.form.get("application_id")
+        plant_name = request.form.get("plant_name")
+        
+        if not uploaded_file or not customer_id_str:
+            return jsonify({"error": "Missing file or customer_id"}), 400
+            
+        customer_id = ObjectId(customer_id_str)
+        app_oid = ObjectId(app_id_str) if app_id_str and app_id_str != 'undefined' else None
+        
+        # Read ZIP
+        zip_binary = uploaded_file.read()
+        zip_base64 = base64.b64encode(zip_binary).decode('utf-8')
+        
+        with zipfile.ZipFile(uploaded_file) as zf:
+            if "device_details.json" not in zf.namelist():
+                return jsonify({"error": "Invalid package: device_details.json not found inside ZIP"}), 400
+                
+            with zf.open("device_details.json") as jf:
+                details = json.load(jf)
+                
+        device_name = details.get("device_name")
+        device_id_str = details.get("device_id")
+        device_token = details.get("endpoint_id")
+        app_version = details.get("app_version", "1.0")
+        
+        if not device_name or not device_id_str:
+            return jsonify({"error": "Invalid details in device_details.json"}), 400
+            
+        # 1. Update or create the actual device
+        existing_device = db.devices.find_one({"device_id_string": device_id_str, "customer_id": customer_id})
+        if existing_device:
+            db.devices.update_one(
+                {"_id": existing_device["_id"]},
+                {"$set": {
+                    "name": device_name,
+                    "endpoint_id": device_token,
+                    "application_id": app_oid,
+                    "plant_name": plant_name or details.get("plant_name"),
+                    "status": "PROVISIONED",
+                    "app_version": app_version,
+                    "updated_at": datetime.datetime.now(datetime.timezone.utc)
+                }}
+            )
+            device_oid = existing_device["_id"]
+        else:
+            new_device = {
+                "name": device_name,
+                "device_id_string": device_id_str,
+                "endpoint_id": device_token,
+                "customer_id": customer_id,
+                "application_id": app_oid,
+                "plant_name": plant_name or details.get("plant_name"),
+                "app_version": app_version,
+                "status": "PROVISIONED",
+                "created_at": datetime.datetime.now(datetime.timezone.utc)
+            }
+            dev_result = db.devices.insert_one(new_device)
+            device_oid = dev_result.inserted_id
+            
+        # 2. Record log — include device_oid for certificate↔device linkage
+        log = {
+            "device_id_string": device_id_str,
+            "device_name": device_name,
+            "device_oid": device_oid,
+            "filename": uploaded_file.filename or f"{device_name}_package.zip",
+            "customer_id": customer_id,
+            "plant_name": plant_name or details.get("plant_name"),
+            "application_id": app_oid,
+            "zip_data": zip_base64,
+            "created_at": datetime.datetime.now(datetime.timezone.utc)
+        }
+        db.certificates.insert_one(log)
+        
+        return jsonify({"success": True, "details": details})
+    except Exception as e:
+        print(f"Error in provision_from_zip: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/admin/decrypt-qr", methods=["POST"])
+def decrypt_qr_data():
+    try:
+        data = request.json
+        qr_data = data.get("qrData")
+        if not qr_data:
+            return jsonify({"error": "No QR data provided"}), 400
+            
+        decrypted_string = decrypt(qr_data)
+        
+        device_name = extract_value(decrypted_string, "Device Name")
+        device_id_str = extract_value(decrypted_string, "Device ID")
+        device_token = extract_value(decrypted_string, "Device token")
+        app_version = extract_value(decrypted_string, "Application Version")
+        plant_name = extract_value(decrypted_string, "Plant Name")
+        
+        return jsonify({
+            "device_name": device_name,
+            "device_id": device_id_str,
+            "endpoint_id": device_token,
+            "app_version": app_version,
+            "plant_name": plant_name
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
