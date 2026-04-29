@@ -1,0 +1,468 @@
+<svg width="760" height="1080" viewBox="0 0 760 1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="pageBg" x1="0" y1="0" x2="760" y2="1080" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#bae6fd"/>
+      <stop offset="40%"  stop-color="#fce7f3"/>
+      <stop offset="100%" stop-color="#bbf7d0"/>
+    </linearGradient>
+    <radialGradient id="aura1" cx="100" cy="150" r="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#7dd3fc" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aura2" cx="660" cy="200" r="240" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f9a8d4" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#f9a8d4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aura3" cx="380" cy="900" r="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#86efac" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#86efac" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aura4" cx="50" cy="850" r="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fef3c7" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#fef3c7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aura5" cx="720" cy="900" r="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#cffafe" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#cffafe" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#6366f1" flood-opacity="0.12"/>
+    </filter>
+    <filter id="shadowSm" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#000" flood-opacity="0.09"/>
+    </filter>
+    <clipPath id="canvas"><rect width="760" height="1080"/></clipPath>
+    <pattern id="dotGrid" x="0" y="0" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="16" cy="16" r="1.2" fill="#93c5fd" opacity="0.4"/>
+    </pattern>
+  </defs>
+
+  <g clip-path="url(#canvas)">
+
+  <!-- BACKGROUND -->
+  <rect width="760" height="1080" fill="url(#pageBg)"/>
+  <rect width="760" height="1080" fill="url(#aura1)"/>
+  <rect width="760" height="1080" fill="url(#aura2)"/>
+  <rect width="760" height="1080" fill="url(#aura3)"/>
+  <rect width="760" height="1080" fill="url(#aura4)"/>
+  <rect width="760" height="1080" fill="url(#aura5)"/>
+  <rect width="760" height="1080" fill="url(#dotGrid)"/>
+
+  <!-- Decorative large circles -->
+  <circle cx="700" cy="80"  r="140" fill="none" stroke="#f0abfc" stroke-width="1" opacity="0.22" stroke-dasharray="10 7"/>
+  <circle cx="60"  cy="980" r="120" fill="none" stroke="#fcd34d" stroke-width="1" opacity="0.22" stroke-dasharray="8 6"/>
+  <circle cx="380" cy="540" r="300" fill="none" stroke="#a5b4fc" stroke-width="0.6" opacity="0.10" stroke-dasharray="14 10"/>
+  <circle cx="720" cy="860" r="100" fill="none" stroke="#6ee7b7" stroke-width="0.9" opacity="0.20" stroke-dasharray="6 5"/>
+  <circle cx="40"  cy="160" r="90"  fill="none" stroke="#93c5fd" stroke-width="0.9" opacity="0.20" stroke-dasharray="6 5"/>
+
+  <!-- Guide lines faint -->
+  <g stroke="#bfdbfe" stroke-width="0.5" opacity="0.5">
+    <line x1="0" y1="360" x2="760" y2="360"/>
+    <line x1="0" y1="720" x2="760" y2="720"/>
+    <line x1="380" y1="0" x2="380" y2="1080"/>
+  </g>
+
+  <!-- 1. ROBOT violet -->
+  <g transform="translate(100,90) scale(0.32) translate(-162,-200)" stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)">
+    <g stroke="#7c3aed" stroke-width="2.5" fill="none">
+      <rect x="62" y="90" width="200" height="175" rx="18" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2.5"/>
+      <rect x="82" y="118" width="68" height="60" rx="9" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+      <rect x="92" y="128" width="48" height="40" rx="6" fill="#ddd6fe" stroke="#7c3aed" stroke-width="1.5"/>
+      <rect x="174" y="118" width="68" height="60" rx="9" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+      <rect x="184" y="128" width="48" height="40" rx="6" fill="#ddd6fe" stroke="#7c3aed" stroke-width="1.5"/>
+      <circle cx="116" cy="148" r="10" fill="#7c3aed" stroke="none"/>
+      <circle cx="208" cy="148" r="10" fill="#7c3aed" stroke="none"/>
+      <circle cx="120" cy="144" r="3" fill="white" stroke="none"/>
+      <circle cx="212" cy="144" r="3" fill="white" stroke="none"/>
+      <line x1="162" y1="90" x2="162" y2="52" stroke-width="2.5"/>
+      <circle cx="162" cy="40" r="14" fill="#ede9fe" stroke="#7c3aed" stroke-width="2.5"/>
+      <circle cx="162" cy="40" r="6"  fill="#7c3aed" stroke="none"/>
+      <rect x="88" y="196" width="148" height="48" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+      <line x1="100" y1="212" x2="224" y2="212" stroke-width="1.8"/>
+      <line x1="100" y1="228" x2="224" y2="228" stroke-width="1.8"/>
+      <rect x="14"  y="136" width="42" height="22" rx="11" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+      <rect x="268" y="136" width="42" height="22" rx="11" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+      <circle cx="14"  cy="147" r="8" fill="#ddd6fe" stroke="#7c3aed" stroke-width="2"/>
+      <circle cx="310" cy="147" r="8" fill="#ddd6fe" stroke="#7c3aed" stroke-width="2"/>
+      <rect x="96"  y="265" width="38" height="68" rx="12" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+      <rect x="190" y="265" width="38" height="68" rx="12" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+      <rect x="88"  y="323" width="54" height="18" rx="9" fill="#ddd6fe" stroke="#7c3aed" stroke-width="2"/>
+      <rect x="182" y="323" width="54" height="18" rx="9" fill="#ddd6fe" stroke="#7c3aed" stroke-width="2"/>
+    </g>
+  </g>
+
+  <!-- 2. ROBOT rose -->
+  <g transform="translate(430,90) scale(0.32) translate(-1707,-810)" stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)">
+    <g stroke="#f43f5e" stroke-width="2.5" fill="none">
+      <rect x="1620" y="730" width="175" height="155" rx="16" fill="#fff1f2" stroke="#f43f5e" stroke-width="2.5"/>
+      <rect x="1636" y="756" width="56" height="50" rx="8" fill="#ffe4e6" stroke="#f43f5e" stroke-width="2"/>
+      <rect x="1644" y="764" width="40" height="34" rx="5" fill="#fecdd3" stroke="#f43f5e" stroke-width="1.5"/>
+      <rect x="1722" y="756" width="56" height="50" rx="8" fill="#ffe4e6" stroke="#f43f5e" stroke-width="2"/>
+      <rect x="1730" y="764" width="40" height="34" rx="5" fill="#fecdd3" stroke="#f43f5e" stroke-width="1.5"/>
+      <circle cx="1664" cy="781" r="9"  fill="#f43f5e" stroke="none"/>
+      <circle cx="1750" cy="781" r="9"  fill="#f43f5e" stroke="none"/>
+      <circle cx="1667" cy="778" r="3"  fill="white" stroke="none"/>
+      <circle cx="1753" cy="778" r="3"  fill="white" stroke="none"/>
+      <line x1="1707" y1="730" x2="1707" y2="700" stroke-width="2.5"/>
+      <circle cx="1707" cy="689" r="12"  fill="#ffe4e6" stroke="#f43f5e" stroke-width="2.5"/>
+      <circle cx="1707" cy="689" r="5"   fill="#f43f5e" stroke="none"/>
+      <rect x="1642" y="820" width="130" height="42" rx="8" fill="#ffe4e6" stroke="#f43f5e" stroke-width="2"/>
+      <line x1="1654" y1="835" x2="1760" y2="835" stroke-width="1.8"/>
+      <line x1="1654" y1="851" x2="1760" y2="851" stroke-width="1.8"/>
+      <rect x="1580" y="762" width="38" height="20" rx="10" fill="#ffe4e6" stroke="#f43f5e" stroke-width="2"/>
+      <rect x="1796" y="762" width="38" height="20" rx="10" fill="#ffe4e6" stroke="#f43f5e" stroke-width="2"/>
+      <rect x="1646" y="862" width="32" height="56" rx="10" fill="#ffe4e6" stroke="#f43f5e" stroke-width="2"/>
+      <rect x="1736" y="862" width="32" height="56" rx="10" fill="#ffe4e6" stroke="#f43f5e" stroke-width="2"/>
+      <rect x="1638" y="905" width="48" height="16" rx="8" fill="#fecdd3" stroke="#f43f5e" stroke-width="2"/>
+      <rect x="1728" y="905" width="48" height="16" rx="8" fill="#fecdd3" stroke="#f43f5e" stroke-width="2"/>
+    </g>
+  </g>
+
+  <!-- 3. QR CODE indigo -->
+  <g transform="translate(660,100) scale(0.32) translate(-1520,-188)" filter="url(#shadow)">
+    <rect x="1380" y="48" width="280" height="280" rx="18" fill="#eef2ff" stroke="#4f46e5" stroke-width="2.5"/>
+    <rect x="1402" y="70"  width="72" height="72" rx="8"  fill="#e0e7ff" stroke="#4f46e5" stroke-width="2.5"/>
+    <rect x="1414" y="82"  width="48" height="48" rx="5"  fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5"/>
+    <rect x="1422" y="90"  width="32" height="32" rx="3"  fill="#4f46e5" stroke="none"/>
+    <rect x="1566" y="70"  width="72" height="72" rx="8"  fill="#e0e7ff" stroke="#4f46e5" stroke-width="2.5"/>
+    <rect x="1578" y="82"  width="48" height="48" rx="5"  fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5"/>
+    <rect x="1586" y="90"  width="32" height="32" rx="3"  fill="#4f46e5" stroke="none"/>
+    <rect x="1402" y="234" width="72" height="72" rx="8"  fill="#e0e7ff" stroke="#4f46e5" stroke-width="2.5"/>
+    <rect x="1414" y="246" width="48" height="48" rx="5"  fill="#c7d2fe" stroke="#4f46e5" stroke-width="1.5"/>
+    <rect x="1422" y="254" width="32" height="32" rx="3"  fill="#4f46e5" stroke="none"/>
+    <g fill="#4f46e5">
+      <rect x="1488" y="70"  width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1506" y="70"  width="14" height="14" rx="2" opacity="0.5"/>
+      <rect x="1524" y="70"  width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1488" y="88"  width="14" height="14" rx="2" opacity="0.5"/>
+      <rect x="1506" y="88"  width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1488" y="106" width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1524" y="106" width="14" height="14" rx="2" opacity="0.5"/>
+      <rect x="1506" y="124" width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1524" y="124" width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1488" y="234" width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1524" y="234" width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1542" y="234" width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1506" y="270" width="14" height="14" rx="2" opacity="0.9"/>
+      <rect x="1488" y="160" width="14" height="14" rx="2" opacity="0.7"/>
+      <rect x="1524" y="160" width="14" height="14" rx="2" opacity="0.7"/>
+      <rect x="1506" y="196" width="14" height="14" rx="2" opacity="0.9"/>
+    </g>
+  </g>
+
+  <!-- 4. PADLOCK cyan -->
+  <g transform="translate(100,270) scale(0.32) translate(-184,-627)" filter="url(#shadow)">
+    <g stroke="#0891b2" stroke-width="2.5" stroke-linecap="round" fill="none">
+      <path d="M108 540 L108 494 Q108 448 164 448 Q220 448 220 494 L220 540" stroke-width="3"/>
+      <rect x="76" y="538" width="216" height="178" rx="20" fill="#ecfeff" stroke="#0891b2" stroke-width="2.5"/>
+      <circle cx="184" cy="610" r="36" fill="#cffafe" stroke="#0891b2" stroke-width="2.5"/>
+      <circle cx="184" cy="610" r="22" fill="#0891b2" stroke="none"/>
+      <rect x="174" y="636" width="20" height="48" rx="8" fill="#0891b2" stroke="none"/>
+      <circle cx="104" cy="702" r="8" fill="#cffafe" stroke="#0891b2" stroke-width="2"/>
+      <circle cx="264" cy="702" r="8" fill="#cffafe" stroke="#0891b2" stroke-width="2"/>
+    </g>
+  </g>
+
+  <!-- 5. CERTIFICATE emerald -->
+  <g transform="translate(430,260) scale(0.32) translate(-1520,-585)" filter="url(#shadow)">
+    <rect x="1320" y="460" width="400" height="250" rx="18" fill="#f0fdf4" stroke="#059669" stroke-width="2.5"/>
+    <rect x="1320" y="460" width="400" height="56" rx="18" fill="#d1fae5" stroke="#059669" stroke-width="2.5"/>
+    <rect x="1320" y="496" width="400" height="20" rx="0" fill="#d1fae5"/>
+    <circle cx="1400" cy="614" r="56"  fill="#d1fae5" stroke="#059669" stroke-width="2.5"/>
+    <circle cx="1400" cy="614" r="42"  fill="none"   stroke="#059669" stroke-width="2" stroke-dasharray="6 4"/>
+    <circle cx="1400" cy="614" r="28"  fill="#a7f3d0" stroke="#059669" stroke-width="2"/>
+    <polygon points="1400,594 1404,608 1419,608 1407,617 1411,631 1400,622 1389,631 1393,617 1381,608 1396,608" fill="#059669" stroke="none"/>
+    <line x1="1468" y1="530" x2="1698" y2="530" stroke="#059669" stroke-width="2"/>
+    <line x1="1468" y1="554" x2="1680" y2="554" stroke="#059669" stroke-width="1.5" stroke-dasharray="5 3" opacity="0.6"/>
+    <line x1="1468" y1="576" x2="1660" y2="576" stroke="#059669" stroke-width="1.5" stroke-dasharray="5 3" opacity="0.5"/>
+    <polygon points="1594,710 1618,676 1642,710 1618,698" fill="#a7f3d0" stroke="#059669" stroke-width="2"/>
+  </g>
+
+  <!-- 6. SHIELD rose -->
+  <g transform="translate(660,270) scale(0.32) translate(-540,-790)" filter="url(#shadow)">
+    <path d="M440 730 Q440 870 540 910 Q640 870 640 730 L640 690 Q590 676 540 656 Q490 676 440 690 Z" fill="#fff1f2" stroke="#e11d48" stroke-width="2.8"/>
+    <path d="M454 736 Q454 866 540 903 Q626 866 626 736 L626 698 Q584 685 540 667 Q496 685 454 698 Z" fill="none" stroke="#e11d48" stroke-width="1.2" stroke-dasharray="8 5" opacity="0.5"/>
+    <polyline points="490,790 524,828 596,754" stroke="#e11d48" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <circle cx="540" cy="790" r="58" fill="#ffe4e6" stroke="none" opacity="0.5"/>
+  </g>
+
+  <!-- 7. FINGERPRINT pink -->
+  <g transform="translate(200,440) scale(0.32) translate(-1180,-200)" stroke="#db2777" stroke-width="2" fill="none" opacity="0.8">
+    <circle cx="1180" cy="200" r="110"/>
+    <circle cx="1180" cy="200" r="88"/>
+    <circle cx="1180" cy="200" r="66"/>
+    <circle cx="1180" cy="200" r="44"/>
+    <circle cx="1180" cy="200" r="22"/>
+    <line x1="1180" y1="88"  x2="1180" y2="74"  stroke="#bae6fd" stroke-width="7"/>
+    <line x1="1068" y1="200" x2="1054" y2="200" stroke="#bae6fd" stroke-width="7"/>
+    <line x1="1292" y1="200" x2="1306" y2="200" stroke="#bae6fd" stroke-width="7"/>
+    <line x1="1180" y1="312" x2="1180" y2="326" stroke="#bae6fd" stroke-width="7"/>
+    <line x1="1258" y1="122" x2="1270" y2="110" stroke="#bae6fd" stroke-width="7"/>
+    <line x1="1102" y1="122" x2="1090" y2="110" stroke="#bae6fd" stroke-width="7"/>
+  </g>
+
+  <!-- 8. WIFI teal -->
+  <g transform="translate(550,430) scale(0.32) translate(-460,-120)" stroke="#0d9488" stroke-linecap="round" fill="none">
+    <path d="M412 92 Q460 44 508 92" stroke-width="3.5" opacity="0.9"/>
+    <path d="M390 116 Q460 32 530 116" stroke-width="3"   opacity="0.75"/>
+    <path d="M366 140 Q460 20 554 140" stroke-width="2.5" opacity="0.55"/>
+    <path d="M342 164 Q460 8  578 164" stroke-width="2"   opacity="0.35"/>
+    <circle cx="460" cy="100" r="10" fill="#0d9488" stroke="none"/>
+    <line x1="460" y1="110" x2="460" y2="148" stroke-width="2.5"/>
+    <ellipse cx="460" cy="160" rx="18" ry="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="2"/>
+  </g>
+
+  <!-- 9. ENVELOPE orange -->
+  <g transform="translate(100,530) scale(0.32) translate(-186,-515)" filter="url(#shadowSm)">
+    <rect x="56"  y="420" width="260" height="190" rx="14" fill="#fff7ed" stroke="#c2410c" stroke-width="2.2"/>
+    <path d="M56 434 L186 520 L316 434" fill="none" stroke="#c2410c" stroke-width="2.2" stroke-linejoin="round"/>
+    <line x1="56"  y1="610" x2="156" y2="510" stroke="#c2410c" stroke-width="1.5" opacity="0.5"/>
+    <line x1="316" y1="610" x2="216" y2="510" stroke="#c2410c" stroke-width="1.5" opacity="0.5"/>
+    <circle cx="316" cy="420" r="22" fill="#ea580c" stroke="none"/>
+    <line x1="308" y1="420" x2="324" y2="420" stroke="white" stroke-width="3"/>
+    <line x1="316" y1="412" x2="316" y2="428" stroke="white" stroke-width="3"/>
+  </g>
+
+  <!-- 10. SPEECH BUBBLE lime -->
+  <g transform="translate(380,510) scale(0.32) translate(-1000,-745)" filter="url(#shadowSm)">
+    <path d="M860 700 Q860 660 900 660 L1100 660 Q1140 660 1140 700 L1140 760 Q1140 800 1100 800 L930 800 L900 830 L910 800 Q860 800 860 760 Z" fill="#f7fee7" stroke="#65a30d" stroke-width="2.2"/>
+    <line x1="890" y1="700" x2="1110" y2="700" stroke="#65a30d" stroke-width="1.8" stroke-dasharray="6 4" opacity="0.5"/>
+    <line x1="890" y1="722" x2="1110" y2="722" stroke="#65a30d" stroke-width="1.8" stroke-dasharray="6 4" opacity="0.4"/>
+    <line x1="890" y1="744" x2="1080" y2="744" stroke="#65a30d" stroke-width="1.8" stroke-dasharray="6 4" opacity="0.3"/>
+  </g>
+
+  <!-- 11. CLOUD UPLOAD sky -->
+  <g transform="translate(620,510) scale(0.32) translate(-1570,-575)" filter="url(#shadowSm)">
+    <path d="M1430 600 Q1420 560 1450 540 Q1460 500 1510 510 Q1530 480 1570 490 Q1610 480 1630 510 Q1680 500 1690 540 Q1720 560 1710 600 Z" fill="#e0f2fe" stroke="#0369a1" stroke-width="2.2"/>
+    <line x1="1570" y1="650" x2="1570" y2="590" stroke="#0369a1" stroke-width="3" stroke-linecap="round"/>
+    <polyline points="1548,614 1570,590 1592,614" stroke="#0369a1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <line x1="1530" y1="658" x2="1610" y2="658" stroke="#0369a1" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- 12. MAGNIFYING GLASS purple -->
+  <g transform="translate(200,650) scale(0.32) translate(-1268,-876)" filter="url(#shadowSm)">
+    <circle cx="1240" cy="840" r="70"  fill="#faf5ff" stroke="#7e22ce" stroke-width="2.5"/>
+    <circle cx="1240" cy="840" r="48"  fill="#f3e8ff" stroke="#7e22ce" stroke-width="2"/>
+    <path d="M1212 812 Q1230 798 1252 802" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+    <line x1="1296" y1="896" x2="1336" y2="936" stroke="#7e22ce" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="1296" cy="896" r="4" fill="#7e22ce" stroke="none"/>
+  </g>
+
+  <!-- 13. LOCATION PIN rose -->
+  <g transform="translate(520,640) scale(0.32) translate(-140,-640)" filter="url(#shadowSm)">
+    <path d="M80 620 Q80 560 140 560 Q200 560 200 620 Q200 670 140 720 Q80 670 80 620 Z" fill="#fff1f2" stroke="#be123c" stroke-width="2.5"/>
+    <circle cx="140" cy="614" r="24" fill="#fecdd3" stroke="#be123c" stroke-width="2"/>
+    <circle cx="140" cy="614" r="10" fill="#be123c" stroke="none"/>
+    <ellipse cx="140" cy="728" rx="28" ry="8" fill="#fecdd3" stroke="#be123c" stroke-width="1.5" opacity="0.6"/>
+  </g>
+
+  <!-- 14. CALENDAR emerald -->
+  <g transform="translate(660,600) scale(0.32) translate(-1540,-520)" filter="url(#shadowSm)">
+    <rect x="1440" y="420" width="200" height="200" rx="14" fill="#ecfdf5" stroke="#047857" stroke-width="2.2"/>
+    <rect x="1440" y="420" width="200" height="48" rx="14" fill="#a7f3d0" stroke="#047857" stroke-width="2.2"/>
+    <rect x="1440" y="450" width="200" height="18" fill="#a7f3d0"/>
+    <circle cx="1494" cy="420" r="8" fill="white" stroke="#047857" stroke-width="2"/>
+    <circle cx="1540" cy="420" r="8" fill="white" stroke="#047857" stroke-width="2"/>
+    <circle cx="1586" cy="420" r="8" fill="white" stroke="#047857" stroke-width="2"/>
+    <rect x="1458" y="480" width="20" height="20" rx="4" fill="#d1fae5" stroke="#047857" stroke-width="1"/>
+    <rect x="1488" y="480" width="20" height="20" rx="4" fill="#d1fae5" stroke="#047857" stroke-width="1"/>
+    <rect x="1518" y="480" width="20" height="20" rx="4" fill="#6ee7b7" stroke="#047857" stroke-width="1"/>
+    <rect x="1548" y="480" width="20" height="20" rx="4" fill="#d1fae5" stroke="#047857" stroke-width="1"/>
+    <rect x="1458" y="510" width="20" height="20" rx="4" fill="#d1fae5" stroke="#047857" stroke-width="1"/>
+    <rect x="1548" y="510" width="20" height="20" rx="4" fill="#047857" stroke="#047857" stroke-width="1"/>
+    <rect x="1458" y="540" width="20" height="20" rx="4" fill="#d1fae5" stroke="#047857" stroke-width="1"/>
+    <rect x="1608" y="540" width="20" height="20" rx="4" fill="#6ee7b7" stroke="#047857" stroke-width="1"/>
+  </g>
+
+  <!-- 15. CHECKLIST teal -->
+  <g transform="translate(100,790) scale(0.32) translate(-196,-900)" filter="url(#shadowSm)">
+    <rect x="56" y="760" width="280" height="280" rx="16" fill="#f0fdfa" stroke="#0f766e" stroke-width="2.2"/>
+    <rect x="56" y="760" width="280" height="46" rx="16" fill="#99f6e4" stroke="#0f766e" stroke-width="2.2"/>
+    <rect x="56" y="790" width="280" height="16" fill="#99f6e4"/>
+    <g stroke="#0f766e" stroke-width="2" stroke-linecap="round">
+      <rect x="80"  y="828" width="26" height="26" rx="6" fill="#ccfbf1" stroke="#0f766e" stroke-width="2"/>
+      <polyline points="86,841 92,848 101,836" fill="none" stroke="#0f766e" stroke-width="2.5"/>
+      <line x1="118" y1="841" x2="302" y2="841" stroke-width="2" opacity="0.6"/>
+      <rect x="80"  y="868" width="26" height="26" rx="6" fill="#ccfbf1" stroke="#0f766e" stroke-width="2"/>
+      <polyline points="86,881 92,888 101,876" fill="none" stroke="#0f766e" stroke-width="2.5"/>
+      <line x1="118" y1="881" x2="280" y2="881" stroke-width="2" opacity="0.6"/>
+      <rect x="80"  y="908" width="26" height="26" rx="6" fill="white" stroke="#0f766e" stroke-width="2"/>
+      <line x1="118" y1="921" x2="290" y2="921" stroke-width="2" opacity="0.4" stroke-dasharray="6 4"/>
+      <rect x="80"  y="948" width="26" height="26" rx="6" fill="white" stroke="#0f766e" stroke-width="2"/>
+      <line x1="118" y1="961" x2="270" y2="961" stroke-width="2" opacity="0.4" stroke-dasharray="6 4"/>
+    </g>
+  </g>
+
+  <!-- 16. PIE CHART multi -->
+  <g transform="translate(380,800) scale(0.32) translate(-960,-920)" filter="url(#shadowSm)">
+    <circle cx="960" cy="920" r="110" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+    <path d="M960 920 L960 810 A110 110 0 0 1 1047 975 Z" fill="#818cf8" opacity="0.85"/>
+    <path d="M960 920 L1047 975 A110 110 0 0 1 888 1024 Z" fill="#34d399" opacity="0.85"/>
+    <path d="M960 920 L888 1024 A110 110 0 0 1 854 856 Z" fill="#fb7185" opacity="0.85"/>
+    <path d="M960 920 L854 856 A110 110 0 0 1 960 810 Z" fill="#fbbf24" opacity="0.85"/>
+    <circle cx="960" cy="920" r="54" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  </g>
+
+  <!-- 17. BAR CHART violet -->
+  <g transform="translate(610,800) scale(0.32) translate(-510,-530)" filter="url(#shadowSm)">
+    <rect x="350" y="410" width="320" height="260" rx="14" fill="#fafafa" stroke="#c4b5fd" stroke-width="1.8"/>
+    <line x1="392" y1="430" x2="392" y2="648" stroke="#94a3b8" stroke-width="1.5"/>
+    <line x1="392" y1="648" x2="652" y2="648" stroke="#94a3b8" stroke-width="1.5"/>
+    <g stroke="#e2e8f0" stroke-width="1" stroke-dasharray="4 3">
+      <line x1="392" y1="590" x2="652" y2="590"/>
+      <line x1="392" y1="530" x2="652" y2="530"/>
+      <line x1="392" y1="470" x2="652" y2="470"/>
+    </g>
+    <rect x="412" y="540" width="34" height="108" rx="6" fill="#a78bfa" opacity="0.85"/>
+    <rect x="460" y="470" width="34" height="178" rx="6" fill="#7c3aed" opacity="0.85"/>
+    <rect x="508" y="510" width="34" height="138" rx="6" fill="#a78bfa" opacity="0.85"/>
+    <rect x="556" y="490" width="34" height="158" rx="6" fill="#7c3aed" opacity="0.85"/>
+    <rect x="604" y="530" width="34" height="118" rx="6" fill="#a78bfa" opacity="0.85"/>
+  </g>
+
+  <!-- 18. CLOCK slate -->
+  <g transform="translate(200,930) scale(0.32) translate(-1780,-600)" filter="url(#shadowSm)">
+    <circle cx="1780" cy="600" r="100" fill="#f8fafc" stroke="#334155" stroke-width="3"/>
+    <circle cx="1780" cy="600" r="88"  fill="none"   stroke="#cbd5e1" stroke-width="1" stroke-dasharray="5 4"/>
+    <circle cx="1780" cy="600" r="6"   fill="#334155"/>
+    <g stroke="#334155" stroke-width="2.5" stroke-linecap="round">
+      <line x1="1780" y1="508" x2="1780" y2="520"/>
+      <line x1="1780" y1="680" x2="1780" y2="692"/>
+      <line x1="1688" y1="600" x2="1700" y2="600"/>
+      <line x1="1860" y1="600" x2="1872" y2="600"/>
+    </g>
+    <line x1="1780" y1="600" x2="1780" y2="540" stroke="#334155" stroke-width="5" stroke-linecap="round"/>
+    <line x1="1780" y1="600" x2="1832" y2="574" stroke="#334155" stroke-width="3.5" stroke-linecap="round"/>
+    <line x1="1780" y1="600" x2="1745" y2="654" stroke="#e11d48" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <!-- 19. STAR RATING amber -->
+  <g transform="translate(460,940) scale(0.32) translate(-1786,-794)">
+    <polygon points="1786,760 1795,786 1824,786 1801,802 1809,828 1786,812 1763,828 1771,802 1748,786 1777,786" fill="#f59e0b" stroke="#d97706" stroke-width="1.5"/>
+    <polygon points="1836,760 1845,786 1874,786 1851,802 1859,828 1836,812 1813,828 1821,802 1798,786 1827,786" fill="#f59e0b" stroke="#d97706" stroke-width="1.5"/>
+    <polygon points="1886,760 1895,786 1924,786 1901,802 1909,828 1886,812 1863,828 1871,802 1848,786 1877,786" fill="#f59e0b" stroke="#d97706" stroke-width="1.5"/>
+    <polygon points="1736,760 1745,786 1774,786 1751,802 1759,828 1736,812 1713,828 1721,802 1698,786 1727,786" fill="#f59e0b" stroke="#d97706" stroke-width="1.5"/>
+    <polygon points="1686,760 1695,786 1724,786 1701,802 1709,828 1686,812 1663,828 1671,802 1648,786 1677,786" fill="none" stroke="#d97706" stroke-width="1.5" opacity="0.4"/>
+  </g>
+
+  <!-- 20. CHAT BUBBLE teal -->
+  <g transform="translate(660,930) scale(0.32) translate(-1255,-468)" filter="url(#shadowSm)">
+    <path d="M1130 440 Q1130 420 1150 420 L1360 420 Q1380 420 1380 440 L1380 480 Q1380 500 1360 500 L1156 500 L1130 516 L1138 500 Q1130 500 1130 480 Z" fill="#ecfdf5" stroke="#10b981" stroke-width="2"/>
+    <line x1="1152" y1="448" x2="1356" y2="448" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5 3" opacity="0.5"/>
+    <line x1="1152" y1="466" x2="1320" y2="466" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5 3" opacity="0.35"/>
+  </g>
+
+  <!-- 21. LAPTOP slate -->
+  <g transform="translate(330,700) scale(0.32) translate(-890,-770)" filter="url(#shadowSm)">
+    <rect x="760" y="680" width="260" height="180" rx="10" fill="#f8fafc" stroke="#475569" stroke-width="2"/>
+    <rect x="772" y="692" width="236" height="156" rx="6"  fill="#1e293b"/>
+    <rect x="784" y="704" width="212" height="132" rx="4" fill="#0f172a"/>
+    <line x1="796" y1="720" x2="980" y2="720" stroke="#38bdf8" stroke-width="1.5" opacity="0.6"/>
+    <line x1="796" y1="736" x2="960" y2="736" stroke="#818cf8" stroke-width="1.5" opacity="0.5"/>
+    <line x1="796" y1="752" x2="940" y2="752" stroke="#34d399" stroke-width="1.5" opacity="0.5"/>
+    <rect x="796" y="764" width="60" height="10" rx="2" fill="#f59e0b" opacity="0.6"/>
+    <rect x="740" y="860" width="300" height="14" rx="7" fill="#cbd5e1" stroke="#475569" stroke-width="1.5"/>
+  </g>
+
+  <!-- 22. CIRCUIT NODES indigo -->
+  <g transform="translate(530,180) scale(0.32) translate(-930,-150)" stroke="#818cf8" fill="none">
+    <line x1="700"  y1="100" x2="820"  y2="160" stroke-width="1.5" opacity="0.5"/>
+    <line x1="820"  y1="160" x2="940"  y2="80"  stroke-width="1.5" opacity="0.5"/>
+    <line x1="940"  y1="80"  x2="1060" y2="180" stroke-width="1.5" opacity="0.5"/>
+    <line x1="1060" y1="180" x2="1160" y2="110" stroke-width="1.5" opacity="0.5"/>
+    <line x1="820"  y1="160" x2="900"  y2="220" stroke-width="1.5" opacity="0.4"/>
+    <line x1="900"  y1="220" x2="1060" y2="180" stroke-width="1.5" opacity="0.4"/>
+    <circle cx="700"  cy="100" r="12" fill="#eef2ff" stroke="#818cf8" stroke-width="2"/>
+    <circle cx="700"  cy="100" r="5"  fill="#818cf8" stroke="none"/>
+    <circle cx="820"  cy="160" r="14" fill="#eef2ff" stroke="#818cf8" stroke-width="2"/>
+    <circle cx="820"  cy="160" r="6"  fill="#818cf8" stroke="none"/>
+    <circle cx="940"  cy="80"  r="16" fill="#eef2ff" stroke="#818cf8" stroke-width="2"/>
+    <circle cx="940"  cy="80"  r="7"  fill="#818cf8" stroke="none"/>
+    <circle cx="1060" cy="180" r="12" fill="#eef2ff" stroke="#818cf8" stroke-width="2"/>
+    <circle cx="1060" cy="180" r="5"  fill="#818cf8" stroke="none"/>
+    <circle cx="1160" cy="110" r="14" fill="#eef2ff" stroke="#818cf8" stroke-width="2"/>
+    <circle cx="1160" cy="110" r="6"  fill="#818cf8" stroke="none"/>
+  </g>
+
+  <!-- 23. GEARS amber -->
+  <g transform="translate(310,430) scale(0.32) translate(-350,-880)" stroke="#d97706" stroke-width="2.5" fill="none">
+    <circle cx="300" cy="860" r="76"  fill="#fffbeb" stroke="#d97706" stroke-width="2.5"/>
+    <circle cx="300" cy="860" r="48"  fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+    <circle cx="300" cy="860" r="16"  fill="#fde68a" stroke="#d97706" stroke-width="2"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(0   300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(30  300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(60  300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(90  300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(120 300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(150 300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(180 300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(210 300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(240 300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(270 300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(300 300 860)"/>
+    <rect x="291" y="778" width="18" height="22" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="2" transform="rotate(330 300 860)"/>
+  </g>
+
+  <!-- 24. BROWSER WINDOW sky -->
+  <g transform="translate(490,340) scale(0.32) translate(-1510,-880)" filter="url(#shadow)">
+    <rect x="1340" y="760" width="340" height="240" rx="14" fill="#f0f9ff" stroke="#0284c7" stroke-width="2.2"/>
+    <rect x="1340" y="760" width="340" height="42" rx="14" fill="#bae6fd" stroke="#0284c7" stroke-width="2.2"/>
+    <rect x="1340" y="784" width="340" height="18" rx="0"  fill="#bae6fd"/>
+    <circle cx="1362" cy="781" r="7" fill="#f87171" stroke="none"/>
+    <circle cx="1382" cy="781" r="7" fill="#fbbf24" stroke="none"/>
+    <circle cx="1402" cy="781" r="7" fill="#34d399" stroke="none"/>
+    <rect x="1422" y="770" width="242" height="22" rx="11" fill="white" stroke="#7dd3fc" stroke-width="1.5"/>
+    <g stroke="#7dd3fc" stroke-width="2" stroke-linecap="round">
+      <rect x="1360" y="822" width="60" height="44" rx="6" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+      <line x1="1432" y1="830" x2="1650" y2="830"/>
+      <line x1="1432" y1="848" x2="1630" y2="848"/>
+      <rect x="1360" y="882" width="60" height="44" rx="6" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+      <line x1="1432" y1="890" x2="1650" y2="890"/>
+      <line x1="1432" y1="908" x2="1610" y2="908"/>
+    </g>
+  </g>
+
+  <!-- 25. AVATAR CARDS -->
+  <g transform="translate(300,970) scale(0.32) translate(-1180,-714)" filter="url(#shadowSm)">
+    <rect x="1140" y="680" width="130" height="100" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.8"/>
+    <circle cx="1180" cy="714" r="22" fill="#ddd6fe" stroke="#7c3aed" stroke-width="2"/>
+    <circle cx="1180" cy="706" r="10" fill="#7c3aed" stroke="none"/>
+    <path d="M1158 736 Q1180 752 1202 736" fill="#ddd6fe" stroke="#7c3aed" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="1216" y1="710" x2="1258" y2="710" stroke="#7c3aed" stroke-width="1.5" opacity="0.5"/>
+    <line x1="1216" y1="724" x2="1248" y2="724" stroke="#7c3aed" stroke-width="1.5" opacity="0.3"/>
+    <rect x="1158" y="754" width="96" height="20" rx="6" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  </g>
+
+  <!-- ACCENT DOTS scattered -->
+  <g stroke="none">
+    <circle cx="60"  cy="60"  r="5"   fill="#818cf8" opacity="0.5"/>
+    <circle cx="80"  cy="78"  r="3.5" fill="#818cf8" opacity="0.35"/>
+    <circle cx="380" cy="180" r="4"   fill="#fb7185" opacity="0.45"/>
+    <circle cx="700" cy="400" r="4"   fill="#2dd4bf" opacity="0.5"/>
+    <circle cx="30"  cy="420" r="4"   fill="#7c3aed" opacity="0.4"/>
+    <circle cx="740" cy="540" r="4"   fill="#0891b2" opacity="0.4"/>
+    <circle cx="430" cy="660" r="4"   fill="#059669" opacity="0.4"/>
+    <circle cx="130" cy="680" r="3.5" fill="#ea580c" opacity="0.4"/>
+    <circle cx="580" cy="740" r="3.5" fill="#6d28d9" opacity="0.4"/>
+    <circle cx="260" cy="870" r="4"   fill="#db2777" opacity="0.4"/>
+    <circle cx="740" cy="1020" r="3.5" fill="#d97706" opacity="0.4"/>
+    <circle cx="50"  cy="1050" r="3.5" fill="#0f766e" opacity="0.4"/>
+  </g>
+
+  <!-- CORNER ORNAMENTS -->
+  <g stroke-linecap="round" fill="none">
+    <polyline points="20,32 20,16 36,16" stroke="#7c3aed" stroke-width="2.5" opacity="0.4"/>
+    <circle cx="20" cy="16" r="4" fill="#7c3aed" opacity="0.45"/>
+    <polyline points="740,16 724,16 724,32" stroke="#f43f5e" stroke-width="2.5" opacity="0.4"/>
+    <circle cx="740" cy="16" r="4" fill="#f43f5e" opacity="0.45"/>
+    <polyline points="20,1048 20,1064 36,1064" stroke="#059669" stroke-width="2.5" opacity="0.4"/>
+    <circle cx="20" cy="1064" r="4" fill="#059669" opacity="0.45"/>
+    <polyline points="740,1064 724,1064 724,1048" stroke="#d97706" stroke-width="2.5" opacity="0.4"/>
+    <circle cx="740" cy="1064" r="4" fill="#d97706" opacity="0.45"/>
+  </g>
+
+  <!-- OUTER BORDER -->
+  <rect x="1" y="1" width="758" height="1078" fill="none" stroke="#bfdbfe" stroke-width="1.5" rx="2" opacity="0.7"/>
+
+  </g>
+</svg>
